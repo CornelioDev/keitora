@@ -28,7 +28,7 @@ const CRATES = ["crates/keitora-core/clippy.toml", "crates/keitora-ipc/clippy.to
 /**
  * What the crates ban on top of the root file, as AGENTS.md's "Hard rules" say: no system
  * clock, no `std::process`, no network, no other OS dependencies (L5 and L2 of the security
- * reviews).
+ * reviews), and no name resolution (L-3 of the T-1.4 review).
  */
 const PURE_BANS = {
   "disallowed-methods": [
@@ -56,6 +56,8 @@ const PURE_BANS = {
     "std::fs::write",
     "std::fs::File::open",
     "std::fs::File::create",
+    "std::net::ToSocketAddrs::to_socket_addrs",
+    "url::Url::socket_addrs",
   ],
   "disallowed-types": [
     "std::process::Command",
