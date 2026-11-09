@@ -10,8 +10,10 @@
 //!
 //! - [`clock`]: the source of time, and a fake one for tests.
 //! - [`model`]: blocklists, their targets and exceptions, and their validation.
+//! - [`site`]: which URLs a blocklist blocks.
 
 #![forbid(unsafe_code)]
 
 pub mod clock;
 pub mod model;
+pub mod site;
