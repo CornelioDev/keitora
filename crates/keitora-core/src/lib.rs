@@ -11,9 +11,12 @@
 //! - [`clock`]: the source of time, and a fake one for tests.
 //! - [`model`]: blocklists, their targets and exceptions, and their validation.
 //! - [`site`]: which URLs a blocklist blocks.
+//! - [`app`]: which running programs a blocklist blocks, and which are never
+//!   blocked.
 
 #![forbid(unsafe_code)]
 
+pub mod app;
 pub mod clock;
 pub mod model;
 pub mod site;

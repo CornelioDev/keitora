@@ -67,7 +67,7 @@ LockKind       = None | UntilTimerEnds | RandomText { len }
 
 Only `UntilTimerEnds` makes a session strict. `RandomText` adds friction: typing the text stops the session, so it isn't a guarantee against a determined user or a script.
 
-Sites are platform-independent. Apps are logical entities with one identifier per platform ([ADR-0005](adr/0005-cross-platform-app-identity.md)); on iOS the identifier is an opaque, device-local token that is never synced.
+Sites are platform-independent. Apps are logical entities with one identifier per platform ([ADR-0005](adr/0005-cross-platform-app-identity.md)); on iOS the identifier is an opaque, device-local token that is never synced. How sites and apps are matched against a blocklist is in [ADR-0009](adr/0009-textual-rule-matching.md).
 
 ## Session lifecycle
 

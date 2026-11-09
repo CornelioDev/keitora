@@ -38,7 +38,7 @@ Because the service runs as `SYSTEM` and accepts input from user-level processes
 | Disable or remove the extension | `ExtensionInstallForcelist` policy + heartbeat | F4, F5 |
 | Incognito / InPrivate | Browser policies | F5 |
 | Use another browser | Browsers without the extension are blocked as apps | F4 |
-| Rename the executable | Match by path as well as name (MVP); hash/signer post-MVP | F1 |
+| Rename the executable | Match by path as well as name (MVP); hash/signer post-MVP. Launching through an 8.3 alias of the file name (`EPICGA~1.EXE`) evades name and path rules in the pure matcher, so the service expands short names before matching (T-2.6) | F1, F2 |
 | Uninstall | MSI refuses while a strict session is active | F5 |
 | Edit the database | `SYSTEM`-only ACL | F5 |
 | Determined local administrator | **Out of scope.** The goal is to make bypassing costlier than waiting, not impossible. Users can run their daily account as a standard user for stronger guarantees. | — |
