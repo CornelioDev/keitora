@@ -103,7 +103,7 @@ When the last task of a phase is approved:
 
 1. `security-reviewer` performs a **phase review** of everything built in the phase. All Medium findings are either fixed or opened as issues.
 2. `qa-engineer` writes an **acceptance checklist** for the whole phase that the maintainer runs end to end.
-3. The orchestrator closes the GitHub milestone and moves **Current status** to the next phase.
+3. The orchestrator closes the GitHub milestone, moves **Current status** to the next phase, and updates the phase status in [ROADMAP.md](../ROADMAP.md), the public summary.
 
 ## Working in parallel
 

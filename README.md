@@ -10,7 +10,7 @@ Block distracting websites and apps during focus sessions — and, in strict mod
 
 </div>
 
-> **Status:** early development. Nothing is released yet — see the [roadmap](docs/roadmap.md).
+> **Status:** early development. Nothing is released yet — see the [roadmap](ROADMAP.md).
 
 <p align="center">
   <img src="docs/assets/readme/timer.png" alt="Timer screen at rest: a 25:00 ring, the blocklist and preset selectors, the strict mode toggle, a Start focus button and today's totals." width="49%">
