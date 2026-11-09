@@ -130,6 +130,18 @@
 //!   `ipv4_mapped_ipv6_address_is_the_same_host_as_ipv4`, fixture cases
 //!   `ip_*`, `ipv4_mapped_*`, `hexadecimal_ipv4_mapped_*`, `ipv6_*`.
 //! - **R3, extended**: `hostile_paths_and_hosts_never_make_the_matcher_panic`.
+//!
+//! # Rework round 2: finding of the security re-review
+//!
+//! On 2026-11-09 the maintainer decided to fix finding N-1 within T-1.4 and
+//! approved extending these tests and the fixture for it.
+//!
+//! - **N-1 — an encoded semicolon (`%3B`, any case) counts like `;`**: an
+//!   exception with a path doesn't apply to a URL path that contains one, and
+//!   lenient readings remove `%3B…` parameters like `;…` ones:
+//!   `encoded_semicolon_counts_like_a_semicolon`, fixture cases
+//!   `*encoded_parameter*`, `*encoded_segment_parameters`,
+//!   `domain_exception_ignores_encoded_parameters`.
 
 #![cfg(test)]
 
@@ -957,4 +969,65 @@ fn hostile_paths_and_hosts_never_make_the_matcher_panic() {
     for url in ["https://../", "https://./", "https://.../"] {
         assert!(!matcher.is_blocked(url), "{url} must not be blocked");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 2, N-1: an encoded semicolon counts like a semicolon
+// ---------------------------------------------------------------------------
+
+#[test]
+fn encoded_semicolon_counts_like_a_semicolon() {
+    let shorts = sites(&["youtube.com/shorts"]);
+    for url in [
+        "https://youtube.com/shorts%3Bx/abc",
+        "https://youtube.com/shorts%3bx",
+        "https://youtube.com/feed/..%3B/shorts/abc",
+        "https://youtube.com/feed/..%3b/shorts",
+        "https://youtube.com//shorts%3Bx/abc",
+    ] {
+        assert!(
+            decide(&shorts, &[], url),
+            "youtube.com/shorts should block {url}"
+        );
+    }
+    for url in [
+        "https://youtube.com/watch%3Bshorts",
+        "https://youtube.com/shortsfoo%3Bx",
+        "https://youtube.com/watch?x=%3B/shorts",
+    ] {
+        assert!(
+            !decide(&shorts, &[], url),
+            "youtube.com/shorts should not block {url}"
+        );
+    }
+
+    let targets = sites(&["x.com"]);
+    let exceptions = patterns(&["x.com/a"]);
+    for url in [
+        "https://x.com/a/..%3B/secret",
+        "https://x.com/a%3Bx/b",
+        "https://x.com/a/b%3bv=1",
+        "https://x.com/a/b%3B",
+    ] {
+        assert!(
+            decide(&targets, &exceptions, url),
+            "x.com/a must not exempt {url}"
+        );
+    }
+    assert!(
+        !decide(&targets, &exceptions, "https://x.com/a/b?q=%3B#%3b"),
+        "x.com/a should exempt a path whose query and fragment have %3B"
+    );
+    assert!(
+        !decide(&targets, &patterns(&["x.com"]), "https://x.com/a%3Bx/b"),
+        "an exception without a path should exempt any path"
+    );
+
+    // Long runs don't make the matcher panic.
+    let long = format!("https://youtube.com/{}shorts", "..%3B/".repeat(20_000));
+    let _ = SiteMatcher::new(&blocklist(
+        shorts.clone(),
+        patterns(&["youtube.com/shorts/ok"]),
+    ))
+    .is_blocked(&long);
 }

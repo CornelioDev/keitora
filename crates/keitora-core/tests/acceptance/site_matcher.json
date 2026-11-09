@@ -8,8 +8,8 @@
     "Wildcard: *.reddit.com means the same as reddit.com; it covers the root domain too (decided by the maintainer, 2026-11-03).",
     "IP address: covers only itself, never subdomains, in any form WHATWG accepts (2130706433 and 0x7f.1 are 127.0.0.1). An IPv4-mapped IPv6 address (::ffff:127.0.0.1, also written ::ffff:7f00:1) is the same host as the IPv4 address, in URLs and in patterns (security review L-2).",
     "Path: the URL's path, after WHATWG resolves . and .. segments, must equal the pattern's path or continue it after a \"/\". Both are compared with percent-encoded unreserved characters (A-Z a-z 0-9 - . _ ~) decoded, and without regard to ASCII letter case. A trailing \"/\" in the pattern is ignored. The query and the fragment are never looked at. youtube.com/shorts covers /shorts, /shorts/ and /shorts/abc, not /shortsfoo.",
-    "Lenient readings (security review M-2): a server may read a path in more than one way, so a target with a path also matches if any lenient reading of the URL's path does. A lenient reading takes the path as compared above and applies any combination of these steps, in this order: read %2F and %5C (any case) as \"/\"; remove from each segment a \";\" and everything after it in that segment; collapse each run of \"/\" into one. Then it resolves . and .. segments again. youtube.com/shorts so blocks //shorts/abc, /shorts%2Fabc, /shorts;x/abc, /feed/..;/shorts/abc and //shorts;x/abc, but not /shortsfoo%2Fabc.",
-    "An exception with a path doesn't apply at all when the URL's path contains \"//\", %2F, %5C (any case) or \";\" (security review M-2); otherwise it applies as described above. An exception with no path doesn't look at the path.",
+    "Lenient readings (security review M-2): a server may read a path in more than one way, so a target with a path also matches if any lenient reading of the URL's path does. A lenient reading takes the path as compared above and applies any combination of these steps, in this order: read %2F and %5C (any case) as \"/\"; remove from each segment a \";\" or %3B (any case) and everything after it in that segment (security re-review N-1); collapse each run of \"/\" into one. Then it resolves . and .. segments again. youtube.com/shorts so blocks //shorts/abc, /shorts%2Fabc, /shorts;x/abc, /shorts%3Bx/abc, /feed/..;/shorts/abc and //shorts;x/abc, but not /shortsfoo%2Fabc or /watch%3Bshorts.",
+    "An exception with a path doesn't apply at all when the URL's path contains \"//\", %2F, %5C, %3B (any case) or \";\" (security review M-2 and re-review N-1); otherwise it applies as described above. An exception with no path doesn't look at the path.",
     "Only the URL's host and path count: its port and user info are ignored.",
     "A pattern the matcher can't use matches nothing, so such an exception never exempts anything: one with no host (empty, blank, \"*\", \"*.\", \".\", or only a path), a scheme, a port, user info, an empty label (a leading dot, \"..\", more than one trailing dot), a \"*\" other than a leading \"*.\", a query or a fragment, or a host that isn't valid. Blocklist validation rejects every such pattern (security review M-1); pattern_validation lists examples of both kinds. Patterns in neither list are not pinned here."
   ],
@@ -1188,6 +1188,72 @@
       "targets": [{ "kind": "site", "pattern": "https://reddit.com/" }],
       "exceptions": [],
       "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "target_path_matches_with_encoded_segment_parameters",
+      "note": "Security re-review N-1: an encoded semicolon (%3B, any case) counts like a semicolon.",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%3Bx/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_a_lowercase_encoded_parameter_on_its_last_segment",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%3bx",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_when_an_encoded_parameter_hides_a_dot_segment",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed/..%3B/shorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "encoded_parameter_named_like_the_target_path_does_not_block",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch%3Bshorts",
+      "blocked": false
+    },
+    {
+      "name": "lenient_readings_still_match_whole_segments_with_encoded_parameters",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shortsfoo%3Bx",
+      "blocked": false
+    },
+    {
+      "name": "exception_path_does_not_apply_when_an_encoded_parameter_hides_a_dot_segment",
+      "note": "Security re-review N-1: an encoded semicolon (%3B, any case) counts like a semicolon.",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/..%3B/secret",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_an_encoded_parameter_on_its_segment",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a%3Bx/b",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_a_lowercase_encoded_parameter_below_it",
+      "note": "Even where every reading stays below the exception's path, a path with %3B is never exempted.",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b%3bv=1",
+      "blocked": true
+    },
+    {
+      "name": "domain_exception_ignores_encoded_parameters",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com"],
+      "url": "https://old.reddit.com/r%3Bx/rust",
       "blocked": false
     }
   ],
