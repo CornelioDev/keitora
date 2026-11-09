@@ -73,9 +73,17 @@
 //!   both name and path targets, as the matcher only sees the path's text
 //!   (F0 security review, L3). Matching by hash or signer is post-MVP
 //!   (`docs/threat-model.md`).
-//! - 8.3 short names (`C:\PROGRA~2\…`) aren't resolved, as that would need
-//!   the file system: a program launched through one is only caught by a
-//!   name target.
+//! - 8.3 short names (`PROGRA~2`, `EPICGA~1.EXE`) aren't expanded, as that
+//!   would need the file system. `QueryFullProcessImageNameW` reports the
+//!   path a program was launched with, so a short alias of a folder evades
+//!   path targets, and a short alias of the file name itself (one that
+//!   doesn't fit 8.3, such as `EpicGamesLauncher.exe` launched as
+//!   `EPICGA~1.EXE`) evades both name and path targets. A name target
+//!   catches a program launched through short names only when its file
+//!   name is already 8.3 (`steam.exe`). The service closes this gap (T-2.6,
+//!   review M-1): it expands `~` components of local drive paths with
+//!   `GetLongPathNameW`, never of UNC paths, and asks the matcher about both
+//!   forms; see [`AppMatcher::verdict`].
 //! - Letter case follows Unicode's case mapping as of the Rust release that
 //!   builds Keitora. NTFS writes its upcase table when a volume is formatted,
 //!   so a letter that gained a case pair in a later Unicode version, or whose
@@ -88,8 +96,32 @@
 //! (`docs/threat-model.md`). The matcher doesn't need a blocklist to have
 //! passed [`Blocklist::validate`], and no input makes it panic. Its work
 //! grows linearly with the length of the image path, and only
-//! logarithmically with the number of targets. Its verdict is only a
-//! candidate: the service decides which processes it may end (#10).
+//! logarithmically with the number of targets.
+//!
+//! # What the service must do
+//!
+//! The matcher trusts its other inputs, which only the service may supply:
+//!
+//! - **The Windows directory** comes from `GetSystemWindowsDirectoryW`, not
+//!   `GetWindowsDirectoryW` (per user on a terminal server) or
+//!   `%SystemRoot%` (an environment variable). If it isn't a full path, no
+//!   system program is protected, so the service treats a failed lookup as
+//!   fatal and applies no blocks.
+//! - **Keitora's executables** are found by the service itself, from its
+//!   own module path and fixed file names, never from a client, `HKCU` or a
+//!   manifest, and live in a folder only administrators can write to.
+//!   Otherwise a user could protect any program by naming it.
+//! - **Image paths** come from the kernel, through
+//!   `QueryFullProcessImageNameW` with flags 0, never from a process's own
+//!   memory (its PEB), which the process can rewrite.
+//! - **8.3 short names** in a local drive path are expanded with
+//!   `GetLongPathNameW` (never in a UNC path, so that `SYSTEM` never signs
+//!   in to a remote server), and the matcher is asked about both forms: the
+//!   process is a candidate if either is [`AppVerdict::Blocked`], and is
+//!   protected if the long form is [`AppVerdict::Protected`].
+//! - **The verdict is only a candidate** (#10): the service ends only
+//!   processes whose token belongs to the interactive user's SID in that
+//!   user's session, never `SYSTEM` or protected (PPL) processes.
 //!
 //! [`AppIdentifiers::windows_exe`]: crate::model::AppIdentifiers::windows_exe
 //! [`AppIdentifiers::windows_path`]: crate::model::AppIdentifiers::windows_path
@@ -151,7 +183,8 @@ impl ProtectedProcesses {
     /// Builds the list of protected programs.
     ///
     /// `windows_dir` is the Windows directory, such as `C:\Windows`, as
-    /// `GetSystemWindowsDirectoryW` reports it. Protected in it are
+    /// `GetSystemWindowsDirectoryW` reports it (not `GetWindowsDirectoryW`
+    /// or `%SystemRoot%`). Protected in it are
     /// `explorer.exe` and, in its `System32` folder, `csrss.exe`,
     /// `winlogon.exe`, `wininit.exe`, `smss.exe`, `services.exe`,
     /// `lsass.exe`, `svchost.exe`, `dwm.exe`, `sihost.exe`, `ctfmon.exe`,
@@ -161,11 +194,15 @@ impl ProtectedProcesses {
     ///
     /// `keitora_exes` are the full paths of Keitora's own executables: the
     /// service, the desktop app and the native messaging host. Only the paths
-    /// given are protected, not copies of them elsewhere.
+    /// given are protected, not copies of them elsewhere. The service finds
+    /// them itself, from its own module path and fixed file names (never
+    /// from a client, `HKCU` or a manifest), in a folder only administrators
+    /// can write to.
     ///
     /// It never fails: a `windows_dir` that isn't a full path protects no
     /// system program, and an entry of `keitora_exes` that isn't one
-    /// protects nothing.
+    /// protects nothing. The service must therefore treat a failed lookup of
+    /// the Windows directory as fatal and apply no blocks.
     #[must_use]
     pub fn new(windows_dir: &str, keitora_exes: &[&str]) -> Self {
         let mut paths = BTreeSet::new();
@@ -257,6 +294,18 @@ impl AppMatcher {
     /// A path that isn't a full path is [`AppVerdict::Allowed`]. The answer
     /// depends only on `image_path`, the blocklist and the protected list,
     /// not on earlier calls.
+    ///
+    /// `image_path` must come from the kernel, through
+    /// `QueryFullProcessImageNameW` with flags 0, never from the process's
+    /// own memory (its PEB). As the matcher doesn't expand 8.3 short names,
+    /// the service also asks about the long form of a local drive path that
+    /// has a `~` component, from `GetLongPathNameW` (never for a UNC path):
+    /// the process is a candidate if either form is [`AppVerdict::Blocked`],
+    /// and is protected if the long form is [`AppVerdict::Protected`].
+    ///
+    /// [`AppVerdict::Blocked`] is only a candidate (#10): the service ends a
+    /// process only if its token belongs to the interactive user's SID in
+    /// that user's session, and never a `SYSTEM` or protected (PPL) process.
     #[must_use]
     pub fn verdict(&self, image_path: &str) -> AppVerdict {
         let Some(path) = FullPath::parse(image_path) else {
