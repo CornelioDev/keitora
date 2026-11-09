@@ -149,7 +149,7 @@ To see the app in another language in a development build, start it with the lan
 
 ## How we work
 
-- **Planning** lives in [docs/roadmap.md](docs/roadmap.md). Tasks have IDs (`T-1.3`); phases map to GitHub milestones.
+- **Planning** lives in [docs/roadmap.md](docs/roadmap.md). Tasks have IDs (`T-1.3`); phases map to GitHub milestones. [ROADMAP.md](ROADMAP.md) is the short public summary, one line per phase.
 - **Architecture** is described in [docs/architecture.md](docs/architecture.md); decisions are recorded in [docs/adr/](docs/adr/).
 - **Conventions** for code, naming and tests are in [AGENTS.md](AGENTS.md#conventions) and apply to humans too.
 

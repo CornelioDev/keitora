@@ -1,5 +1,7 @@
 # Roadmap
 
+The detailed plan, task by task, for contributors and agents. [ROADMAP.md](../ROADMAP.md) is the short public summary.
+
 ## Current status
 
 - **Active phase:** F1 — Domain core
