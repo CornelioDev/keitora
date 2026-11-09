@@ -47,20 +47,22 @@
 //! ## Paths a server may read differently
 //!
 //! Servers don't all read a path the same way: some take `%2F` or `%5C` as a
-//! `/`, drop `;` parameters from a segment, or merge repeated slashes. So
+//! `/`, drop `;` parameters from a segment (also when the `;` is encoded as
+//! `%3B`), or merge repeated slashes. So
 //! that such a path can't slip past a target, or fall under an exception it
 //! doesn't belong to:
 //!
 //! - A **target** with a path also matches if any lenient reading of the URL's
 //!   path does. A lenient reading applies any combination of these steps, in
 //!   this order: read `%2F` and `%5C` as `/`; remove from each segment a `;`
-//!   and everything after it; collapse each run of `/` into one. Then it
-//!   resolves `.` and `..` again. `youtube.com/shorts` so blocks
-//!   `/shorts%2Fabc`, `//shorts` and `/feed/..;/shorts`, but not
-//!   `/shortsfoo%2Fabc`.
+//!   or `%3B` and everything after it; collapse each run of `/` into one.
+//!   Then it resolves `.` and `..` again. Encoded characters count in any
+//!   case. `youtube.com/shorts` so blocks `/shorts%2Fabc`, `//shorts`,
+//!   `/shorts%3Bx` and `/feed/..;/shorts`, but not `/shortsfoo%2Fabc` or
+//!   `/watch%3Bshorts`.
 //! - An **exception** with a path doesn't apply at all when the URL's path
-//!   contains `//`, `%2F`, `%5C` or `;`. An exception with no path doesn't
-//!   look at the path.
+//!   contains `//`, `%2F`, `%5C`, `%3B` (in any case) or `;`. An exception
+//!   with no path doesn't look at the path.
 //!
 //! ## Patterns that match nothing
 //!
@@ -327,9 +329,14 @@ fn decode_unreserved(high: char, low: char) -> Option<char> {
 }
 
 /// Tells if a server could read a normalized path in more than one way: it
-/// contains `//`, an encoded `/` or `\` (`%2f`, `%5c`), or a `;`.
+/// contains `//`, an encoded `/` or `\` (`%2f`, `%5c`), or a `;`, plain or
+/// encoded (`%3b`). A normalized path has lowercase hexadecimal digits.
 fn is_ambiguous(path: &str) -> bool {
-    path.contains("//") || path.contains("%2f") || path.contains("%5c") || path.contains(';')
+    path.contains("//")
+        || path.contains("%2f")
+        || path.contains("%5c")
+        || path.contains("%3b")
+        || path.contains(';')
 }
 
 /// The eight lenient readings of a normalized path (see the module
@@ -363,11 +370,12 @@ fn decode_slashes(path: &str) -> String {
     path.replace("%2f", "/").replace("%5c", "/")
 }
 
-/// Removes from each segment of a path a `;` and everything after it.
+/// Removes from each segment of a normalized path a `;` or an encoded one
+/// (`%3b`), and everything after it.
 fn strip_parameters(path: &str) -> String {
     let mut stripped = String::with_capacity(path.len());
     let mut in_parameters = false;
-    for c in path.chars() {
+    for c in path.replace("%3b", ";").chars() {
         if c == '/' {
             in_parameters = false;
         } else if c == ';' {

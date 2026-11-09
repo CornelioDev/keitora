@@ -206,7 +206,7 @@ fn page_reads_an_ipv4_mapped_address_as_ipv4() {
 
 #[test]
 fn ambiguous_paths_have_double_slashes_encoded_slashes_or_parameters() {
-    for path in ["//a", "/a//", "/a%2fb", "/a%5cb", "/a;b", "/;"] {
+    for path in ["//a", "/a//", "/a%2fb", "/a%5cb", "/a;b", "/;", "/a%3bb"] {
         assert!(is_ambiguous(path), "{path:?}");
     }
     for path in ["/", "/a/b", "/a%2eb", "/a%25b", "/a%2"] {
@@ -241,6 +241,7 @@ fn strip_parameters_removes_them_from_each_segment() {
     assert_eq!(strip_parameters("/a;x/b;y;z/c;"), "/a/b/c");
     assert_eq!(strip_parameters("/;x"), "/");
     assert_eq!(strip_parameters("/a/b"), "/a/b");
+    assert_eq!(strip_parameters("/a%3bx/b%3b/..%3by/c"), "/a/b/../c");
 }
 
 #[test]
