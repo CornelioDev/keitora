@@ -1,15 +1,17 @@
 {
-  "description": "Shared contract for Keitora's site rule matcher (T-1.4). keitora-core's acceptance tests (crates/keitora-core/tests/acceptance_t1_4.rs) and the browser extension's (T-4.3) both check every case. Each case is a blocklist's targets and exceptions, in the JSON shape of keitora_core::model, a URL, and whether that URL is blocked. Only the QA engineer changes this file (docs/workflow.md).",
+  "description": "Shared contract for Keitora's site rule matcher (T-1.4). keitora-core's acceptance tests (crates/keitora-core/tests/acceptance_t1_4.rs and acceptance_t1_4_validation.rs) and the browser extension's (T-4.3, and the add-site form of T-3.7) check it. Each case is a blocklist's targets and exceptions, in the JSON shape of keitora_core::model, a URL, and whether that URL is blocked. pattern_validation lists patterns that blocklist validation accepts and rejects. Only the QA engineer changes this file (docs/workflow.md).",
   "semantics": [
     "The input is a URL as a browser reports it, parsed as the WHATWG URL Standard says (JavaScript's URL, Rust's url crate). Input that doesn't parse, or whose scheme isn't http or https, is never blocked: it isn't a website.",
     "A URL is blocked when at least one target of kind \"site\" matches it and no exception matches it. Exceptions always take precedence, and on their own never block. Targets of other kinds are ignored.",
-    "Targets and exceptions are patterns with the same meaning: an optional \"*.\" prefix, a domain, and an optional path that starts with \"/\".",
-    "Domain: compared after IDNA processing (UTS #46, as WHATWG does for hosts), so letter case, Unicode or punycode (xn--) form, full-width characters and one trailing dot make no difference. A pattern covers its domain and every subdomain of it, by whole labels: reddit.com covers old.reddit.com, but not notreddit.com or reddit.com.evil.com (decided by the maintainer, 2026-11-03).",
+    "Targets and exceptions are patterns with the same meaning: an optional \"*.\" prefix, a host, and an optional path that starts with \"/\". The host is a domain or an IP address; an IPv6 address is written in brackets, as in a URL ([::1]).",
+    "Domain: compared after IDNA processing (UTS #46, as WHATWG does for hosts), so letter case, Unicode or punycode (xn--) form and full-width characters make no difference. Every trailing dot of the URL's host is ignored (security review L-1), and so is one trailing dot of a pattern. A pattern covers its domain and every subdomain of it, by whole labels: reddit.com covers old.reddit.com, but not notreddit.com or reddit.com.evil.com (decided by the maintainer, 2026-11-03).",
     "Wildcard: *.reddit.com means the same as reddit.com; it covers the root domain too (decided by the maintainer, 2026-11-03).",
+    "IP address: covers only itself, never subdomains, in any form WHATWG accepts (2130706433 and 0x7f.1 are 127.0.0.1). An IPv4-mapped IPv6 address (::ffff:127.0.0.1, also written ::ffff:7f00:1) is the same host as the IPv4 address, in URLs and in patterns (security review L-2).",
     "Path: the URL's path, after WHATWG resolves . and .. segments, must equal the pattern's path or continue it after a \"/\". Both are compared with percent-encoded unreserved characters (A-Z a-z 0-9 - . _ ~) decoded, and without regard to ASCII letter case. A trailing \"/\" in the pattern is ignored. The query and the fragment are never looked at. youtube.com/shorts covers /shorts, /shorts/ and /shorts/abc, not /shortsfoo.",
+    "Lenient readings (security review M-2): a server may read a path in more than one way, so a target with a path also matches if any lenient reading of the URL's path does. A lenient reading takes the path as compared above and applies any combination of these steps, in this order: read %2F and %5C (any case) as \"/\"; remove from each segment a \";\" and everything after it in that segment; collapse each run of \"/\" into one. Then it resolves . and .. segments again. youtube.com/shorts so blocks //shorts/abc, /shorts%2Fabc, /shorts;x/abc, /feed/..;/shorts/abc and //shorts;x/abc, but not /shortsfoo%2Fabc.",
+    "An exception with a path doesn't apply at all when the URL's path contains \"//\", %2F, %5C (any case) or \";\" (security review M-2); otherwise it applies as described above. An exception with no path doesn't look at the path.",
     "Only the URL's host and path count: its port and user info are ignored.",
-    "A pattern with no domain (empty, blank, \"*\", \"*.\", \".\", or only a path) matches nothing, so such an exception never exempts anything.",
-    "Other pattern forms (with a scheme, a port, a query, or \"*\" elsewhere) are not pinned here, except that an exception never exempts more than its domain and path cover."
+    "A pattern the matcher can't use matches nothing, so such an exception never exempts anything: one with no host (empty, blank, \"*\", \"*.\", \".\", or only a path), a scheme, a port, user info, an empty label (a leading dot, \"..\", more than one trailing dot), a \"*\" other than a leading \"*.\", a query or a fragment, or a host that isn't valid. Blocklist validation rejects every such pattern (security review M-1); pattern_validation lists examples of both kinds. Patterns in neither list are not pinned here."
   ],
   "cases": [
     {
@@ -805,6 +807,437 @@
       "exceptions": [],
       "url": "https://example.org/",
       "blocked": false
+    },
+    {
+      "name": "target_path_matches_with_repeated_slashes",
+      "note": "Security review M-2: servers read some paths in more than one way, so a target with a path matches if any lenient reading of the URL's path does.",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com//shorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_three_slashes",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com///shorts",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_an_encoded_slash",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%2Fabc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_a_lowercase_encoded_slash",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%2fabc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_an_encoded_backslash",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%5Cabc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_a_lowercase_encoded_backslash",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%5cabc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_segment_parameters",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts;x/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_a_parameter_on_its_last_segment",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts;jsessionid=1",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_when_encoded_slashes_climb_into_it",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed%2F..%2Fshorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_when_a_parameter_hides_a_dot_segment",
+      "note": "Some servers read ..;/ as ../ once they drop the ; parameter.",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed/..;/shorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_repeated_slashes_and_parameters_combined",
+      "note": "Lenient steps combine: no single step alone turns //shorts;x/abc into /shorts/abc.",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com//shorts;x/abc",
+      "blocked": true
+    },
+    {
+      "name": "target_path_matches_with_encoded_slashes_and_parameters_combined",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed%2F..;/shorts",
+      "blocked": true
+    },
+    {
+      "name": "lenient_readings_still_match_whole_segments_only",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shortsfoo%2Fabc",
+      "blocked": false
+    },
+    {
+      "name": "lenient_readings_still_match_whole_segments_with_parameters",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shortsfoo;x",
+      "blocked": false
+    },
+    {
+      "name": "parameter_named_like_the_target_path_does_not_block",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch;shorts",
+      "blocked": false
+    },
+    {
+      "name": "encoded_slash_below_another_path_does_not_block",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch%2Fshorts",
+      "blocked": false
+    },
+    {
+      "name": "encoded_slashes_climbing_out_of_the_target_path_do_not_block",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts%2F..%2Fwatch",
+      "blocked": false
+    },
+    {
+      "name": "domain_exception_still_beats_a_lenient_target_match",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": ["youtube.com"],
+      "url": "https://youtube.com//shorts;x/abc",
+      "blocked": false
+    },
+    {
+      "name": "exception_path_applies_to_a_plain_path_below_it",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b",
+      "blocked": false
+    },
+    {
+      "name": "exception_path_applies_to_exactly_its_path",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a",
+      "blocked": false
+    },
+    {
+      "name": "exception_path_does_not_apply_with_encoded_slashes",
+      "note": "Security review M-2: an exception with a path doesn't apply when the URL's path contains //, %2F, %5C or ;, which a server may read as outside the exception.",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/..%2F..%2Fsecret",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_repeated_slashes_before_it",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com//a",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_repeated_slashes_inside_it",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a//b",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_an_encoded_slash_below_it",
+      "note": "Even where every reading stays below the exception's path, a path with an encoded slash is never exempted.",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b%2fc",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_an_encoded_backslash",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b%5Cc",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_a_parameter_below_it",
+      "note": "Even where every reading stays below the exception's path, a path with ; is never exempted.",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b;v=1",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_with_a_parameter_on_its_segment",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a;v=1/b",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_apply_when_a_parameter_hides_a_dot_segment",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/..;/secret",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_ignores_slashes_and_semicolons_in_the_query_and_fragment",
+      "targets": [{ "kind": "site", "pattern": "x.com" }],
+      "exceptions": ["x.com/a"],
+      "url": "https://x.com/a/b?u=%2F%2F;x#//",
+      "blocked": false
+    },
+    {
+      "name": "domain_exception_ignores_path_ambiguity",
+      "note": "Exceptions with no path are not affected by M-2.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com"],
+      "url": "https://old.reddit.com//r;x/a%2Fb",
+      "blocked": false
+    },
+    {
+      "name": "two_trailing_dots_in_the_url_host_are_ignored",
+      "note": "Security review L-1: every trailing dot is removed from the URL's host.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com../",
+      "blocked": true
+    },
+    {
+      "name": "ideographic_trailing_dots_in_the_url_host_are_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com。。/",
+      "blocked": true
+    },
+    {
+      "name": "percent_encoded_trailing_dot_in_the_url_host_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com.%2E/",
+      "blocked": true
+    },
+    {
+      "name": "exception_applies_to_a_url_host_with_trailing_dots",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com"],
+      "url": "https://old.reddit.com.../",
+      "blocked": false
+    },
+    {
+      "name": "ip_target_blocks_its_address",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://127.0.0.1:8080/admin",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_blocks_the_ipv4_mapped_ipv6_form",
+      "note": "Security review L-2: an IPv4-mapped IPv6 address (::ffff:a.b.c.d) is the same host as the IPv4 address a.b.c.d.",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://[::ffff:127.0.0.1]/",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_blocks_the_hexadecimal_ipv4_mapped_ipv6_form",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://[::ffff:7f00:1]/",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_blocks_another_mapped_address",
+      "targets": [{ "kind": "site", "pattern": "192.168.1.10" }],
+      "exceptions": [],
+      "url": "http://[::ffff:c0a8:10a]/",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_blocks_the_decimal_form",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://2130706433/",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_blocks_the_shortened_hexadecimal_form",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://0x7f.1/",
+      "blocked": true
+    },
+    {
+      "name": "ip_target_does_not_block_another_address",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://127.0.0.2/",
+      "blocked": false
+    },
+    {
+      "name": "ip_target_does_not_cover_names_that_start_with_it",
+      "note": "An IP address covers only itself, never subdomains.",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://127.0.0.1.nip.io/",
+      "blocked": false
+    },
+    {
+      "name": "ip_target_does_not_block_ipv6_loopback",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": [],
+      "url": "http://[::1]/",
+      "blocked": false
+    },
+    {
+      "name": "ipv4_mapped_ipv6_target_blocks_the_ipv4_address",
+      "targets": [{ "kind": "site", "pattern": "[::ffff:127.0.0.1]" }],
+      "exceptions": [],
+      "url": "http://127.0.0.1/",
+      "blocked": true
+    },
+    {
+      "name": "hexadecimal_ipv4_mapped_ipv6_target_blocks_the_ipv4_address",
+      "targets": [{ "kind": "site", "pattern": "[::ffff:7f00:1]" }],
+      "exceptions": [],
+      "url": "http://127.0.0.1/",
+      "blocked": true
+    },
+    {
+      "name": "ipv6_target_blocks_its_expanded_form",
+      "targets": [{ "kind": "site", "pattern": "[::1]" }],
+      "exceptions": [],
+      "url": "http://[0:0:0:0:0:0:0:1]/",
+      "blocked": true
+    },
+    {
+      "name": "ipv6_loopback_target_does_not_block_ipv4_loopback",
+      "targets": [{ "kind": "site", "pattern": "[::1]" }],
+      "exceptions": [],
+      "url": "http://127.0.0.1/",
+      "blocked": false
+    },
+    {
+      "name": "ip_exception_applies_to_the_ipv4_mapped_ipv6_form",
+      "targets": [{ "kind": "site", "pattern": "127.0.0.1" }],
+      "exceptions": ["127.0.0.1/public"],
+      "url": "http://[::ffff:7f00:1]/public/x",
+      "blocked": false
+    },
+    {
+      "name": "exception_with_a_scheme_exempts_nothing",
+      "note": "Security review M-1: validation rejects this pattern; in an unvalidated blocklist it still matches nothing.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["https://reddit.com/"],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "exception_with_a_port_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["reddit.com:443"],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "exception_with_a_leading_dot_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [".reddit.com"],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "exception_with_two_trailing_dots_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["reddit.com.."],
+      "url": "https://reddit.com../",
+      "blocked": true
+    },
+    {
+      "name": "target_with_a_scheme_blocks_nothing",
+      "targets": [{ "kind": "site", "pattern": "https://reddit.com/" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
     }
-  ]
+  ],
+  "pattern_validation": {
+    "valid": [
+      "reddit.com",
+      "*.reddit.com",
+      "youtube.com/shorts",
+      "youtube.com/shorts/",
+      "youtube.com/",
+      "old.reddit.com/r/rust",
+      "youtube.com/feed/subscriptions",
+      "Reddit.COM",
+      "reddit.com.",
+      "bücher.de",
+      "BÜCHER.de",
+      "xn--bcher-kva.de",
+      "*.bücher.de",
+      "ｒｅｄｄｉｔ.com",
+      "youtube.com/%73horts",
+      "127.0.0.1",
+      "127.0.0.1/admin",
+      "[::1]",
+      "[::ffff:127.0.0.1]"
+    ],
+    "invalid": [
+      { "pattern": "https://www.youtube.com/", "reason": "has a scheme" },
+      { "pattern": "http://reddit.com/r/rust", "reason": "has a scheme" },
+      { "pattern": "youtube.com:443", "reason": "has a port" },
+      { "pattern": "user@reddit.com", "reason": "has user info" },
+      { "pattern": ".reddit.com", "reason": "starts with a dot: an empty label" },
+      { "pattern": "reddit..com", "reason": "has an empty label" },
+      { "pattern": "reddit.com..", "reason": "ends with more than one dot: an empty label" },
+      { "pattern": "*reddit.com", "reason": "has a * that isn't a leading *." },
+      { "pattern": "**.reddit.com", "reason": "has a * that isn't a leading *." },
+      { "pattern": "*.*.reddit.com", "reason": "has a * that isn't a leading *." },
+      { "pattern": "reddit.*", "reason": "has a * that isn't a leading *." },
+      { "pattern": "youtube.com/watch?v=abc", "reason": "has a query" },
+      { "pattern": "youtube.com/shorts#top", "reason": "has a fragment" },
+      { "pattern": "", "reason": "is empty" },
+      { "pattern": "  ", "reason": "is blank" },
+      { "pattern": "\u3000", "reason": "is blank" },
+      { "pattern": "*", "reason": "has no domain" },
+      { "pattern": "*.", "reason": "has no domain" },
+      { "pattern": ".", "reason": "has no domain" },
+      { "pattern": "/shorts", "reason": "is only a path" },
+      { "pattern": "::1", "reason": "an IPv6 address needs brackets" },
+      { "pattern": "[::1", "reason": "an IPv6 address without its closing bracket" },
+      { "pattern": "reddit com", "reason": "has a space in the domain" },
+      { "pattern": "xn--zz.com", "reason": "is not valid punycode" }
+    ]
+  }
 }

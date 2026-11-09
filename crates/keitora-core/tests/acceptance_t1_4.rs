@@ -95,6 +95,41 @@
 //!   `order_of_targets_and_exceptions_does_not_change_the_decision`,
 //!   `one_matcher_answers_many_urls_independently`,
 //!   `matching_target_is_found_in_a_blocklist_at_the_maximum_size`.
+//!
+//! # Rework round 1: findings of the security review
+//!
+//! On 2026-11-09 the maintainer decided to fix every finding of the T-1.4
+//! security review within T-1.4, and approved extending these tests and the
+//! fixture for it. Pattern validation (M-1) is tested in
+//! `acceptance_t1_4_validation.rs`; the matcher's side of it is here.
+//!
+//! - **M-1 — unusable patterns match nothing, also unvalidated**:
+//!   `patterns_validation_rejects_match_nothing_in_an_unvalidated_blocklist`,
+//!   `shared_fixture_lists_valid_and_invalid_patterns`, fixture cases
+//!   `exception_with_a_*_exempts_nothing`, `exception_with_two_trailing_dots_exempts_nothing`,
+//!   `target_with_a_scheme_blocks_nothing`.
+//! - **M-2 — a target with a path matches any lenient reading of the URL's
+//!   path** (`//`, `%2F`/`%5C`, `;` parameters, combined, then dot segments):
+//!   `target_path_matches_any_lenient_reading_of_the_url_path`,
+//!   `lenient_readings_never_widen_a_target_path`, fixture cases
+//!   `target_path_matches_*`, `lenient_readings_still_match_*`,
+//!   `parameter_named_like_the_target_path_does_not_block`,
+//!   `encoded_slash*_do*_not_block`,
+//!   `domain_exception_still_beats_a_lenient_target_match`.
+//! - **M-2 — an exception with a path doesn't apply to a URL path with `//`,
+//!   `%2F`, `%5C` or `;`; one without a path is unaffected**:
+//!   `exception_path_never_applies_to_an_ambiguous_url_path`,
+//!   `exception_without_a_path_ignores_path_ambiguity`, fixture cases
+//!   `exception_path_*`, `domain_exception_ignores_path_ambiguity`.
+//! - **L-1 — every trailing dot of the URL's host is ignored**:
+//!   `every_trailing_dot_of_the_url_host_is_ignored`, fixture cases
+//!   `*_trailing_dot*_in_the_url_host_*`,
+//!   `exception_applies_to_a_url_host_with_trailing_dots`.
+//! - **L-2 — an IPv4-mapped IPv6 address is the same host as its IPv4
+//!   address; an IP covers only itself**:
+//!   `ipv4_mapped_ipv6_address_is_the_same_host_as_ipv4`, fixture cases
+//!   `ip_*`, `ipv4_mapped_*`, `hexadecimal_ipv4_mapped_*`, `ipv6_*`.
+//! - **R3, extended**: `hostile_paths_and_hosts_never_make_the_matcher_panic`.
 
 #![cfg(test)]
 
@@ -117,6 +152,24 @@ struct Fixture {
     description: String,
     semantics: Vec<String>,
     cases: Vec<Case>,
+    pattern_validation: PatternValidation,
+}
+
+/// Patterns that blocklist validation accepts and rejects (security review
+/// M-1); `acceptance_t1_4_validation.rs` checks validation against them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatternValidation {
+    valid: Vec<String>,
+    invalid: Vec<InvalidPattern>,
+}
+
+/// A pattern that validation rejects, and why.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvalidPattern {
+    pattern: String,
+    reason: String,
 }
 
 /// One row of the table.
@@ -613,5 +666,295 @@ fn hostile_input_never_makes_the_matcher_panic() {
     // These aren't URLs a browser would load, so they are never blocked.
     for url in ["\u{0}", "https:", ":", "*", "https://[::1/", "https://@/"] {
         assert!(!as_targets.is_blocked(url), "{url:?} must not be blocked");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 1, M-1: patterns validation rejects match nothing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shared_fixture_lists_valid_and_invalid_patterns() {
+    let lists = fixture().pattern_validation;
+    assert!(!lists.valid.is_empty(), "the fixture lists valid patterns");
+    assert!(
+        !lists.invalid.is_empty(),
+        "the fixture lists invalid patterns"
+    );
+    for invalid in &lists.invalid {
+        assert!(
+            !invalid.reason.trim().is_empty(),
+            "invalid pattern {:?} says why",
+            invalid.pattern
+        );
+        assert!(
+            !lists.valid.contains(&invalid.pattern),
+            "{:?} is listed as both valid and invalid",
+            invalid.pattern
+        );
+    }
+    // The documented forms, and one trailing dot, which matching accepts.
+    for pattern in [
+        "reddit.com",
+        "*.reddit.com",
+        "youtube.com/shorts",
+        "reddit.com.",
+        "bücher.de",
+        "127.0.0.1",
+        "[::1]",
+    ] {
+        assert!(
+            lists.valid.iter().any(|valid| valid == pattern),
+            "{pattern} is not listed as valid"
+        );
+    }
+}
+
+#[test]
+fn patterns_validation_rejects_match_nothing_in_an_unvalidated_blocklist() {
+    let invalid: Vec<String> = fixture()
+        .pattern_validation
+        .invalid
+        .into_iter()
+        .map(|invalid| invalid.pattern)
+        .collect();
+    let urls = [
+        "https://reddit.com/",
+        "https://www.reddit.com/r/rust",
+        "https://reddit.com:443/",
+        "https://youtube.com/",
+        "https://www.youtube.com/shorts/abc",
+        "https://youtube.com/watch?v=abc",
+        "http://[::1]/",
+        "http://127.0.0.1/",
+    ];
+    let broad = sites(&["reddit.com", "youtube.com", "[::1]", "127.0.0.1"]);
+    for pattern in &invalid {
+        let as_target = SiteMatcher::new(&blocklist(sites(&[pattern.as_str()]), vec![]));
+        let as_exception =
+            SiteMatcher::new(&blocklist(broad.clone(), patterns(&[pattern.as_str()])));
+        for url in urls {
+            assert!(
+                !as_target.is_blocked(url),
+                "invalid target {pattern:?} blocked {url}"
+            );
+            assert!(
+                as_exception.is_blocked(url),
+                "invalid exception {pattern:?} exempted {url}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 1, M-2: lenient readings of the URL's path
+// ---------------------------------------------------------------------------
+
+#[test]
+fn target_path_matches_any_lenient_reading_of_the_url_path() {
+    let targets = sites(&["youtube.com/shorts"]);
+    for url in [
+        "https://youtube.com//shorts/abc",
+        "https://youtube.com/shorts%2Fabc",
+        "https://youtube.com/shorts%2fabc",
+        "https://youtube.com/shorts%5Cabc",
+        "https://youtube.com/shorts%5cabc",
+        "https://youtube.com/shorts;x/abc",
+        "https://youtube.com/feed%2F..%2Fshorts",
+        "https://youtube.com/feed%5C..%5Cshorts",
+        "https://youtube.com/feed/..;/shorts/abc",
+        "https://youtube.com/feed;a/..;b/shorts;c/abc",
+        "https://youtube.com//shorts;x/abc",
+        "https://youtube.com/%2Fshorts",
+        "https://m.youtube.com///shorts//abc",
+    ] {
+        assert!(
+            decide(&targets, &[], url),
+            "youtube.com/shorts should block {url}"
+        );
+    }
+}
+
+#[test]
+fn lenient_readings_never_widen_a_target_path() {
+    let targets = sites(&["youtube.com/shorts"]);
+    for url in [
+        "https://youtube.com/shortsfoo%2Fabc",
+        "https://youtube.com/shortsfoo;x",
+        "https://youtube.com/watch;shorts",
+        "https://youtube.com/watch%2Fshorts",
+        "https://youtube.com/sh%2Forts",
+        "https://youtube.com/shorts%2F..%2Fwatch",
+        "https://youtube.com//",
+        "https://youtube.com/watch?next=//shorts",
+    ] {
+        assert!(
+            !decide(&targets, &[], url),
+            "youtube.com/shorts should not block {url}"
+        );
+    }
+}
+
+#[test]
+fn exception_path_never_applies_to_an_ambiguous_url_path() {
+    let targets = sites(&["x.com"]);
+    let exceptions = patterns(&["x.com/a"]);
+    for url in [
+        "https://x.com/a",
+        "https://x.com/a/",
+        "https://x.com/a/b",
+        "https://x.com/A/B",
+        "https://www.x.com/a/b",
+        "https://x.com/a/b?u=%2F%2F;x#//",
+    ] {
+        assert!(
+            !decide(&targets, &exceptions, url),
+            "x.com/a should exempt {url}"
+        );
+    }
+    for url in [
+        "https://x.com//a",
+        "https://x.com/a//b",
+        "https://x.com/a///",
+        "https://x.com/a/..%2F..%2Fsecret",
+        "https://x.com/a/b%2fc",
+        "https://x.com/a/b%2Fc",
+        "https://x.com/a/b%5cc",
+        "https://x.com/a/b%5Cc",
+        "https://x.com/a;v=1",
+        "https://x.com/a/b;v=1",
+        "https://x.com/a/..;/secret",
+    ] {
+        assert!(
+            decide(&targets, &exceptions, url),
+            "x.com/a must not exempt {url}"
+        );
+    }
+}
+
+#[test]
+fn exception_without_a_path_ignores_path_ambiguity() {
+    let targets = sites(&["x.com"]);
+    for exception in ["x.com", "*.x.com", "x.com/"] {
+        for url in [
+            "https://x.com//a",
+            "https://x.com/a/..%2F..%2Fsecret",
+            "https://x.com/a;b",
+            "https://x.com/%5C",
+        ] {
+            assert!(
+                !decide(&targets, &patterns(&[exception]), url),
+                "exception {exception} should exempt {url}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 1, L-1: trailing dots of the URL's host
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_trailing_dot_of_the_url_host_is_ignored() {
+    let targets = sites(&["reddit.com"]);
+    for url in [
+        "https://reddit.com./",
+        "https://reddit.com../",
+        "https://reddit.com.../r/rust",
+        "https://reddit.com\u{3002}\u{3002}/",
+        "https://reddit.com.%2E/",
+        "https://old.reddit.com..../",
+    ] {
+        assert!(decide(&targets, &[], url), "reddit.com should block {url}");
+    }
+    for url in [
+        "https://notreddit.com../",
+        "https://reddit.com..evil.com/",
+        "https://../",
+        "https://./",
+        "https://.../",
+    ] {
+        assert!(
+            !decide(&targets, &[], url),
+            "reddit.com should not block {url}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 1, L-2: IP addresses
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ipv4_mapped_ipv6_address_is_the_same_host_as_ipv4() {
+    for (target, url, blocked) in [
+        ("127.0.0.1", "http://[::ffff:127.0.0.1]/", true),
+        ("127.0.0.1", "http://[::ffff:7f00:1]/", true),
+        ("127.0.0.1", "http://[0:0:0:0:0:ffff:7f00:1]/", true),
+        ("[::ffff:127.0.0.1]", "http://127.0.0.1/", true),
+        ("[::ffff:7f00:1]", "http://[::ffff:127.0.0.1]/", true),
+        ("[::ffff:127.0.0.1]", "http://2130706433/", true),
+        ("10.0.0.1", "http://[::ffff:a00:1]/", true),
+        ("127.0.0.1", "http://[::ffff:7f00:2]/", false),
+        ("127.0.0.1", "http://[::1]/", false),
+        ("[::1]", "http://127.0.0.1/", false),
+        ("127.0.0.1", "http://127.0.0.1.nip.io/", false),
+    ] {
+        assert_eq!(
+            decide(&sites(&[target]), &[], url),
+            blocked,
+            "target {target}, url {url}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rework round 1, R3 extended: hostile paths and hosts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hostile_paths_and_hosts_never_make_the_matcher_panic() {
+    let long = [
+        format!("https://youtube.com/{}", "%2F..".repeat(20_000)),
+        format!("https://youtube.com/{}shorts", "..;/".repeat(20_000)),
+        format!("https://youtube.com/{}shorts", "/".repeat(100_000)),
+        format!("https://youtube.com/{}", ";".repeat(100_000)),
+        format!("https://youtube.com/{}", "%5c".repeat(30_000)),
+        format!("https://x.com/a/{}", "b;/".repeat(30_000)),
+        format!("https://reddit.com{}/", ".".repeat(10_000)),
+        format!("https://reddit.com{}/", "%2E".repeat(10_000)),
+    ];
+    let short = [
+        "http://[::ffff:0:0]/",
+        "http://[::ffff:ffff:ffff]/",
+        "http://[::]/",
+        "http://0.0.0.0/",
+        "http://255.255.255.255/",
+        "https://x.com/;",
+        "https://x.com/%2",
+        "https://x.com/%2f%",
+        "https://x.com/..;",
+        "https://x.com/;/..;/../",
+    ];
+    let matcher = SiteMatcher::new(&blocklist(
+        sites(&[
+            "youtube.com/shorts",
+            "reddit.com",
+            "127.0.0.1",
+            "[::1]",
+            "x.com/a",
+        ]),
+        patterns(&["youtube.com/shorts/ok", "x.com/a/b", "old.reddit.com"]),
+    ));
+    let mut answers = 0_usize;
+    for url in long.iter().map(String::as_str).chain(short) {
+        let _ = matcher.is_blocked(url);
+        answers += 1;
+    }
+    assert_eq!(answers, long.len() + short.len());
+
+    // Hosts made only of dots are empty once their trailing dots go.
+    for url in ["https://../", "https://./", "https://.../"] {
+        assert!(!matcher.is_blocked(url), "{url} must not be blocked");
     }
 }
