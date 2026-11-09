@@ -84,7 +84,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
   - Security: durations and cycle counts have defined maximums, and out-of-range values are rejected ([#15](https://github.com/CornelioDev/keitora/issues/15)).
 - [x] **T-1.4** Site rule matcher: domain, subdomain wildcard (`*.reddit.com`), path (`youtube.com/shorts`), exceptions taking precedence; IDN and case normalization.
   - Acceptance: table-driven tests, at least 25 cases, exported as a shared JSON fixture for the extension.
-- [ ] **T-1.5** App rule matcher: executable name (case-insensitive) and path; a protected-process list that is never blocked (`explorer.exe`, `csrss.exe`, `winlogon.exe`, the service itself, …).
+- [~] **T-1.5** App rule matcher: executable name (case-insensitive) and path; a protected-process list that is never blocked (`explorer.exe`, `csrss.exe`, `winlogon.exe`, the service itself, …).
   - Security: protected processes match by full path, so an executable renamed to a protected name in another folder isn't protected ([#8](https://github.com/CornelioDev/keitora/issues/8)). The matcher never opens or resolves a path ([#11](https://github.com/CornelioDev/keitora/issues/11)). Its result is only a candidate: the service terminates only the interactive user's own processes, enforced in T-2.6 ([#10](https://github.com/CornelioDev/keitora/issues/10)).
 - [ ] **T-1.6** Strict-mode policy: `LockKind` (`None`, `UntilTimerEnds`, `RandomText { len }`) and `can_stop(&session, now) -> Result<(), LockReason>`.
   - Depends on: T-1.3
