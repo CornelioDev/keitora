@@ -89,10 +89,29 @@
 //!
 //! Copying a program under another name and into another folder evades both
 //! name and path rules, as the matcher only sees the path's text. Matching
-//! by hash or signer is post-MVP (`docs/threat-model.md`). The same goes for
-//! a program launched through an 8.3 short path when only a path target
-//! names it. `copying_a_program_under_another_name_and_path_evades_name_and_path_rules`
-//! and `short_name_form_of_a_target_path_is_not_resolved` record this.
+//! by hash or signer is post-MVP (`docs/threat-model.md`).
+//! `copying_a_program_under_another_name_and_path_evades_name_and_path_rules`
+//! records this.
+//!
+//! # Accepted limitation in the pure matcher: 8.3 short names (review M-1)
+//!
+//! `QueryFullProcessImageNameW` reports the path a program was launched
+//! with, so a program launched through 8.3 short names (`PROGRA~1`,
+//! `EPICGA~1.EXE`) is reported with them. The matcher stays textual (#11)
+//! and never expands them:
+//!
+//! - A short alias of a **folder** evades path targets only; a name target
+//!   still catches the program, as its file name is unchanged.
+//! - A short alias of the **file name** itself (one that doesn't fit 8.3,
+//!   such as `EpicGamesLauncher.exe` launched as `EPICGA~1.EXE`) evades
+//!   **both** name and path targets. A name target catches a program
+//!   launched through short names only when its file name is already 8.3
+//!   (`steam.exe`).
+//!
+//! Decided by the maintainer (2026-11-09): T-2.6 expands `~` components with
+//! `GetLongPathNameW` (local drives only) and asks the matcher about both
+//! forms. `short_name_form_of_a_target_path_is_not_resolved` pins the pure
+//! matcher's side.
 //!
 //! # Criteria covered
 //!
@@ -137,7 +156,8 @@
 //!   `lookalike_paths_never_inherit_protection`.
 //! - **S2 — #11, never opens or resolves a path**:
 //!   `paths_are_compared_as_text_whether_or_not_they_exist`,
-//!   `short_name_form_of_a_target_path_is_not_resolved`. The static half of
+//!   `short_name_form_of_a_target_path_is_not_resolved` (also review M-1,
+//!   see the limitation above). The static half of
 //!   #11 is `crates/keitora-core/clippy.toml`, which bans file access in the
 //!   crate (security review to confirm it covers what the code could use).
 //! - **S3 — #10, the verdict is only a candidate**: not testable in a pure
@@ -1181,14 +1201,47 @@ fn paths_are_compared_as_text_whether_or_not_they_exist() {
 
 #[test]
 fn short_name_form_of_a_target_path_is_not_resolved() {
-    // Accepted limitation: `PROGRA~2` would need the file system to resolve.
-    // A name target still catches it.
-    let short = r"C:\PROGRA~2\Steam\steam.exe";
+    // Accepted limitation in the pure matcher (review M-1): expanding 8.3
+    // short names needs the file system, which the matcher never touches
+    // (#11). T-2.6 expands them with `GetLongPathNameW` and asks about both
+    // forms.
+
+    // A short alias of a folder only: the file name is unchanged, so a name
+    // target still catches it, but the path target doesn't.
+    let short_folder = r"C:\PROGRA~2\Steam\steam.exe";
     assert_eq!(
-        verdict(&[by_path(r"C:\Program Files (x86)\Steam\steam.exe")], short),
+        verdict(
+            &[by_path(r"C:\Program Files (x86)\Steam\steam.exe")],
+            short_folder
+        ),
         AppVerdict::Allowed
     );
-    assert_eq!(verdict(&[by_name("steam.exe")], short), AppVerdict::Blocked);
+    assert_eq!(
+        verdict(&[by_name("steam.exe")], short_folder),
+        AppVerdict::Blocked
+    );
+
+    // A short alias of the file name itself, which doesn't fit 8.3: it
+    // evades both the name target and the path target, alone or together.
+    let short_file = r"C:\PROGRA~1\Epic\EPICGA~1.EXE";
+    let long_path = r"C:\Program Files\Epic\EpicGamesLauncher.exe";
+    for targets in [
+        vec![by_name("EpicGamesLauncher.exe")],
+        vec![by_path(long_path)],
+        vec![by_both("EpicGamesLauncher.exe", long_path)],
+        vec![by_name("EpicGamesLauncher.exe"), by_path(long_path)],
+    ] {
+        assert_eq!(
+            verdict(&targets, short_file),
+            AppVerdict::Allowed,
+            "{short_file} with {targets:?}"
+        );
+    }
+    // Once T-2.6 has expanded the alias, the long form is blocked.
+    assert_eq!(
+        verdict(&[by_name("EpicGamesLauncher.exe")], long_path),
+        AppVerdict::Blocked
+    );
 }
 
 // ---------------------------------------------------------------------------
