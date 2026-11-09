@@ -68,7 +68,7 @@ jobs:
       # still runs build.rs files and proc macros through rust-analyzer. It needs
       # rustup and cargo, which windows-latest includes.
       - name: Set up CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
@@ -79,7 +79,7 @@ jobs:
       # from the source files, and `upload` has none. The database upload is off
       # because it needs `security-events: write`; alerts don't use it.
       - name: Analyze
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:${{ matrix.language }}"
           upload: never
@@ -138,7 +138,7 @@ jobs:
           ${{ github.event_name == 'pull_request' &&
           (github.event.pull_request.head.repo.full_name != github.repository ||
           github.event.pull_request.user.login == 'dependabot[bot]') }}
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: ${{ runner.temp }}/sarif
           category: "/language:${{ matrix.language }}"
