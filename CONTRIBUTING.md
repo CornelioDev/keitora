@@ -91,7 +91,7 @@ Review is still needed for what this can't see:
 
 The report for the desktop app and the extension has no minimum; open `apps/desktop/coverage/index.html` or `extension/coverage/index.html` for details.
 
-On Windows without [long paths](https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation) enabled, keep the clone's root path under about 133 characters. From that length on, Vitest fails with `ERR_PACKAGE_IMPORT_NOT_DEFINED` and `"#module-evaluator"`, because the paths inside `node_modules` go over the limit.
+On Windows without [long paths](https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation) enabled, keep the clone's root path at 133 characters or fewer (measured on 2026-11-09). From 134 on, the desktop app's Vitest fails with `ERR_PACKAGE_IMPORT_NOT_DEFINED` and `"#module-evaluator"`, because the paths inside `node_modules` go over the limit. From 147 on, the unit test layout check also fails closed: `link.exe` can't write the build scripts of the ICU crates, which `url` needs, under `target/unit-test-layout`.
 
 While the app has no screens yet, a development build (`tauri dev`, or `pnpm --dir apps/desktop dev` in a browser) opens the component gallery, [`apps/desktop/src/dev/ComponentGallery.vue`](apps/desktop/src/dev/ComponentGallery.vue): every shadcn-vue component the app uses, with a button that switches between the light and dark themes. Production builds leave the gallery out.
 

@@ -64,6 +64,9 @@ disallowed-methods = [
     { path = "std::fs::write", reason = "pure crate, no OS dependencies: return the data instead" },
     { path = "std::fs::File::open", reason = "pure crate, no OS dependencies: take the data as an argument" },
     { path = "std::fs::File::create", reason = "pure crate, no OS dependencies: return the data instead" },
+    # No name resolution: a host is compared as text, never looked up in DNS.
+    { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "pure crate, no network: compare hosts as text, never resolve them" },
+    { path = "url::Url::socket_addrs", reason = "pure crate, no network: compare hosts as text, never resolve them" },
 ]
 
 # --- keitora-core and keitora-ipc only --------------------------------------

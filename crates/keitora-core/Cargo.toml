@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+url.workspace = true
 
 [dev-dependencies]
 serde_json = "1"

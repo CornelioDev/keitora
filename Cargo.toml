@@ -29,6 +29,14 @@ repository = "https://github.com/CornelioDev/keitora"
 # Keitora ships as an application, not as crates on crates.io.
 publish = false
 
+# Dependency versions, set once for the workspace and used with
+# `<name>.workspace = true`.
+[workspace.dependencies]
+# WHATWG URL parsing, with IDNA (UTS #46) for hosts: the site rule matcher in
+# keitora-core parses URLs as a browser does. `std` is its whole default set,
+# named here so that a new default feature isn't picked up unnoticed.
+url = { version = "2.5.8", default-features = false, features = ["std"] }
+
 [profile.release]
 # Integer overflow panics, as in debug builds, instead of silently wrapping:
 # a wrapped value in, say, the remaining-time calculation could shorten a
