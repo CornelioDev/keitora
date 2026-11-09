@@ -1,0 +1,810 @@
+{
+  "description": "Shared contract for Keitora's site rule matcher (T-1.4). keitora-core's acceptance tests (crates/keitora-core/tests/acceptance_t1_4.rs) and the browser extension's (T-4.3) both check every case. Each case is a blocklist's targets and exceptions, in the JSON shape of keitora_core::model, a URL, and whether that URL is blocked. Only the QA engineer changes this file (docs/workflow.md).",
+  "semantics": [
+    "The input is a URL as a browser reports it, parsed as the WHATWG URL Standard says (JavaScript's URL, Rust's url crate). Input that doesn't parse, or whose scheme isn't http or https, is never blocked: it isn't a website.",
+    "A URL is blocked when at least one target of kind \"site\" matches it and no exception matches it. Exceptions always take precedence, and on their own never block. Targets of other kinds are ignored.",
+    "Targets and exceptions are patterns with the same meaning: an optional \"*.\" prefix, a domain, and an optional path that starts with \"/\".",
+    "Domain: compared after IDNA processing (UTS #46, as WHATWG does for hosts), so letter case, Unicode or punycode (xn--) form, full-width characters and one trailing dot make no difference. A pattern covers its domain and every subdomain of it, by whole labels: reddit.com covers old.reddit.com, but not notreddit.com or reddit.com.evil.com (decided by the maintainer, 2026-11-03).",
+    "Wildcard: *.reddit.com means the same as reddit.com; it covers the root domain too (decided by the maintainer, 2026-11-03).",
+    "Path: the URL's path, after WHATWG resolves . and .. segments, must equal the pattern's path or continue it after a \"/\". Both are compared with percent-encoded unreserved characters (A-Z a-z 0-9 - . _ ~) decoded, and without regard to ASCII letter case. A trailing \"/\" in the pattern is ignored. The query and the fragment are never looked at. youtube.com/shorts covers /shorts, /shorts/ and /shorts/abc, not /shortsfoo.",
+    "Only the URL's host and path count: its port and user info are ignored.",
+    "A pattern with no domain (empty, blank, \"*\", \"*.\", \".\", or only a path) matches nothing, so such an exception never exempts anything.",
+    "Other pattern forms (with a scheme, a port, a query, or \"*\" elsewhere) are not pinned here, except that an exception never exempts more than its domain and path cover."
+  ],
+  "cases": [
+    {
+      "name": "domain_blocks_its_own_root_page",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "domain_blocks_every_path_query_and_fragment",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/r/rust/comments/1?sort=new#top",
+      "blocked": true
+    },
+    {
+      "name": "domain_blocks_its_subdomains",
+      "note": "Decided by the maintainer on 2026-11-03: a domain covers its subdomains.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "domain_blocks_nested_subdomains",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://a.b.reddit.com/x",
+      "blocked": true
+    },
+    {
+      "name": "subdomain_does_not_block_its_parent_domain",
+      "targets": [{ "kind": "site", "pattern": "old.reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "subdomain_does_not_block_a_sibling_subdomain",
+      "targets": [{ "kind": "site", "pattern": "old.reddit.com" }],
+      "exceptions": [],
+      "url": "https://www.reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "www_subdomain_does_not_block_the_bare_domain",
+      "note": "Follows from the subdomain rule: reddit.com is not a subdomain of www.reddit.com.",
+      "targets": [{ "kind": "site", "pattern": "www.reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "www_subdomain_blocks_itself",
+      "targets": [{ "kind": "site", "pattern": "www.reddit.com" }],
+      "exceptions": [],
+      "url": "https://www.reddit.com/r/rust",
+      "blocked": true
+    },
+    {
+      "name": "domain_does_not_block_a_longer_name_ending_in_it",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://notreddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "domain_does_not_block_a_domain_it_is_a_prefix_of",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com.evil.com/",
+      "blocked": false
+    },
+    {
+      "name": "domain_does_not_block_another_top_level_domain",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.co/",
+      "blocked": false
+    },
+    {
+      "name": "domain_in_the_path_is_not_the_host",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://evil.com/reddit.com",
+      "blocked": false
+    },
+    {
+      "name": "domain_in_the_query_is_not_the_host",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://evil.com/?next=https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "homograph_with_a_cyrillic_letter_is_another_domain",
+      "note": "The e is U+0435 CYRILLIC SMALL LETTER IE: a different domain (xn--rddit-zwe.com), not reddit.com.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://r\u0435ddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "wildcard_blocks_a_subdomain",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": [],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "wildcard_blocks_the_root_domain",
+      "note": "Decided by the maintainer on 2026-11-03: *.reddit.com also covers reddit.com.",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "wildcard_blocks_nested_subdomains",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": [],
+      "url": "https://a.b.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "wildcard_does_not_block_a_longer_name_ending_in_it",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": [],
+      "url": "https://notreddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "wildcard_does_not_block_a_domain_it_is_a_prefix_of",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com.evil.com/",
+      "blocked": false
+    },
+    {
+      "name": "wildcard_with_a_path_blocks_that_path_on_subdomains",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://old.reddit.com/r/rust/comments/1",
+      "blocked": true
+    },
+    {
+      "name": "wildcard_with_a_path_does_not_block_other_paths",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://old.reddit.com/r/python",
+      "blocked": false
+    },
+    {
+      "name": "path_blocks_exactly_that_path",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts",
+      "blocked": true
+    },
+    {
+      "name": "path_blocks_that_path_with_a_trailing_slash",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts/",
+      "blocked": true
+    },
+    {
+      "name": "path_blocks_paths_below_it",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts/abc123",
+      "blocked": true
+    },
+    {
+      "name": "path_blocks_that_path_on_subdomains",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://m.youtube.com/shorts/abc123",
+      "blocked": true
+    },
+    {
+      "name": "path_ignores_query_and_fragment",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://www.youtube.com/shorts/abc123?feature=share#t=3",
+      "blocked": true
+    },
+    {
+      "name": "path_matches_whole_segments_only",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shortsfoo",
+      "blocked": false
+    },
+    {
+      "name": "path_does_not_block_the_home_page",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/",
+      "blocked": false
+    },
+    {
+      "name": "path_does_not_block_a_url_without_a_path",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com",
+      "blocked": false
+    },
+    {
+      "name": "path_does_not_block_other_paths",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch?v=abc",
+      "blocked": false
+    },
+    {
+      "name": "path_must_be_at_the_start_of_the_url_path",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed/shorts",
+      "blocked": false
+    },
+    {
+      "name": "path_in_the_fragment_is_not_the_path",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch#/shorts",
+      "blocked": false
+    },
+    {
+      "name": "path_in_the_query_is_not_the_path",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch?next=/shorts",
+      "blocked": false
+    },
+    {
+      "name": "path_does_not_block_the_same_path_on_another_domain",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://vimeo.com/shorts",
+      "blocked": false
+    },
+    {
+      "name": "multi_segment_path_matches_whole_segments_only",
+      "targets": [{ "kind": "site", "pattern": "reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://reddit.com/r/rustacean",
+      "blocked": false
+    },
+    {
+      "name": "multi_segment_path_does_not_block_its_parent_path",
+      "targets": [{ "kind": "site", "pattern": "reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://reddit.com/r",
+      "blocked": false
+    },
+    {
+      "name": "multi_segment_path_blocks_paths_below_it",
+      "targets": [{ "kind": "site", "pattern": "reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://reddit.com/r/rust/comments/1",
+      "blocked": true
+    },
+    {
+      "name": "trailing_slash_in_a_pattern_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts/" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts",
+      "blocked": true
+    },
+    {
+      "name": "pattern_with_only_a_slash_blocks_the_whole_site",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/" }],
+      "exceptions": [],
+      "url": "https://youtube.com/watch?v=abc",
+      "blocked": true
+    },
+    {
+      "name": "dot_segments_are_resolved_before_matching",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed/../shorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "percent_encoded_dot_segments_are_resolved_before_matching",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/feed/%2e%2E/shorts",
+      "blocked": true
+    },
+    {
+      "name": "percent_encoded_letters_in_the_url_path_are_decoded",
+      "note": "%73 is s: percent-encoded unreserved characters (A-Z a-z 0-9 - . _ ~) are the same as the characters themselves (RFC 3986, 6.2.2.2).",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/%73horts/abc",
+      "blocked": true
+    },
+    {
+      "name": "percent_encoded_letters_in_the_pattern_path_are_decoded",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/%73horts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts",
+      "blocked": true
+    },
+    {
+      "name": "path_case_is_ignored_in_the_url",
+      "targets": [{ "kind": "site", "pattern": "reddit.com/r/rust" }],
+      "exceptions": [],
+      "url": "https://www.reddit.com/R/Rust/",
+      "blocked": true
+    },
+    {
+      "name": "path_case_is_ignored_in_the_pattern",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/Shorts" }],
+      "exceptions": [],
+      "url": "https://youtube.com/shorts/abc",
+      "blocked": true
+    },
+    {
+      "name": "exception_beats_a_domain_target",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com/r/rust"],
+      "url": "https://old.reddit.com/r/rust/comments/1",
+      "blocked": false
+    },
+    {
+      "name": "exception_does_not_cover_another_subdomain",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com/r/rust"],
+      "url": "https://www.reddit.com/r/rust",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_matches_whole_segments_only",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com/r/rust"],
+      "url": "https://old.reddit.com/r/rustacean",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_does_not_cover_the_rest_of_the_site",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com/r/rust"],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "exception_beats_a_wildcard_target",
+      "targets": [{ "kind": "site", "pattern": "*.reddit.com" }],
+      "exceptions": ["reddit.com"],
+      "url": "https://old.reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "broader_exception_beats_a_narrower_target",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }],
+      "exceptions": ["youtube.com"],
+      "url": "https://youtube.com/shorts/abc123",
+      "blocked": false
+    },
+    {
+      "name": "exception_covers_subdomains_like_a_target",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["youtube.com/feed/subscriptions"],
+      "url": "https://m.youtube.com/feed/subscriptions",
+      "blocked": false
+    },
+    {
+      "name": "subdomain_exception_allows_that_subdomain",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["music.youtube.com"],
+      "url": "https://music.youtube.com/watch?v=abc",
+      "blocked": false
+    },
+    {
+      "name": "subdomain_exception_leaves_other_subdomains_blocked",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["music.youtube.com"],
+      "url": "https://www.youtube.com/watch?v=abc",
+      "blocked": true
+    },
+    {
+      "name": "exception_path_case_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["youtube.com/feed/subscriptions"],
+      "url": "https://www.youtube.com/Feed/Subscriptions",
+      "blocked": false
+    },
+    {
+      "name": "exception_path_prefix_does_not_cover_a_longer_segment",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["youtube.com/feed"],
+      "url": "https://youtube.com/feedback",
+      "blocked": true
+    },
+    {
+      "name": "exception_cannot_be_left_with_dot_segments",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["youtube.com/feed"],
+      "url": "https://youtube.com/feed/%2e%2e/shorts",
+      "blocked": true
+    },
+    {
+      "name": "exception_with_a_query_does_not_exempt_other_queries",
+      "targets": [{ "kind": "site", "pattern": "youtube.com" }],
+      "exceptions": ["youtube.com/watch?v=abc"],
+      "url": "https://youtube.com/watch?v=xyz",
+      "blocked": true
+    },
+    {
+      "name": "exception_alone_blocks_nothing",
+      "targets": [],
+      "exceptions": ["youtube.com/feed"],
+      "url": "https://youtube.com/feed",
+      "blocked": false
+    },
+    {
+      "name": "exception_for_an_unblocked_site_blocks_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["youtube.com"],
+      "url": "https://youtube.com/",
+      "blocked": false
+    },
+    {
+      "name": "exception_with_a_trailing_dot_still_applies",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["old.reddit.com."],
+      "url": "https://old.reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "blank_exception_exempts_nothing",
+      "note": "A pattern that is only whitespace passes T-1.1 validation; it must never become an exception for every site.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [" "],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "empty_exception_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [""],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "whitespace_exceptions_exempt_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["\t ", "\u3000", "   "],
+      "url": "https://reddit.com/r/rust",
+      "blocked": true
+    },
+    {
+      "name": "lone_wildcard_exception_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["*"],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "wildcard_without_a_domain_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["*."],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "dot_exception_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["."],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "slash_exception_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["/"],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "path_only_exception_exempts_nothing",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": ["/r/rust"],
+      "url": "https://reddit.com/r/rust",
+      "blocked": true
+    },
+    {
+      "name": "blank_target_blocks_nothing",
+      "targets": [{ "kind": "site", "pattern": " " }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "empty_target_blocks_nothing",
+      "targets": [{ "kind": "site", "pattern": "" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "host_case_is_ignored_in_the_url",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://REDDIT.COM/",
+      "blocked": true
+    },
+    {
+      "name": "host_case_is_ignored_in_the_pattern",
+      "targets": [{ "kind": "site", "pattern": "Reddit.COM" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "host_case_is_ignored_with_a_wildcard",
+      "targets": [{ "kind": "site", "pattern": "*.REDDIT.com" }],
+      "exceptions": [],
+      "url": "https://Old.Reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "trailing_dot_in_the_url_host_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com./",
+      "blocked": true
+    },
+    {
+      "name": "trailing_dot_in_the_pattern_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com." }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "unicode_pattern_blocks_the_punycode_url",
+      "targets": [{ "kind": "site", "pattern": "bücher.de" }],
+      "exceptions": [],
+      "url": "https://xn--bcher-kva.de/",
+      "blocked": true
+    },
+    {
+      "name": "punycode_pattern_blocks_the_unicode_url",
+      "targets": [{ "kind": "site", "pattern": "xn--bcher-kva.de" }],
+      "exceptions": [],
+      "url": "https://bücher.de/katalog",
+      "blocked": true
+    },
+    {
+      "name": "unicode_pattern_case_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "BÜCHER.de" }],
+      "exceptions": [],
+      "url": "https://bücher.de/",
+      "blocked": true
+    },
+    {
+      "name": "unicode_wildcard_blocks_a_punycode_subdomain",
+      "targets": [{ "kind": "site", "pattern": "*.bücher.de" }],
+      "exceptions": [],
+      "url": "https://shop.xn--bcher-kva.de/",
+      "blocked": true
+    },
+    {
+      "name": "punycode_exception_beats_a_unicode_target",
+      "targets": [{ "kind": "site", "pattern": "bücher.de" }],
+      "exceptions": ["xn--bcher-kva.de/hilfe"],
+      "url": "https://bücher.de/hilfe/kontakt",
+      "blocked": false
+    },
+    {
+      "name": "full_width_letters_in_the_url_host_are_normalized",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://ｒｅｄｄｉｔ.com/",
+      "blocked": true
+    },
+    {
+      "name": "full_width_letters_in_the_pattern_are_normalized",
+      "targets": [{ "kind": "site", "pattern": "ｒｅｄｄｉｔ.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "ideographic_full_stop_in_the_url_host_is_a_dot",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit。com/",
+      "blocked": true
+    },
+    {
+      "name": "percent_encoded_url_host_is_decoded",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://%72eddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "port_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com:8443/",
+      "blocked": true
+    },
+    {
+      "name": "http_is_blocked_like_https",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "http://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "scheme_case_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "HTTPS://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "user_info_before_a_blocked_host_is_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://user:pass@reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "blocked_name_as_user_info_is_not_the_host",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com@evil.com/",
+      "blocked": false
+    },
+    {
+      "name": "blocked_name_as_user_and_password_is_not_the_host",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com:443@evil.com/",
+      "blocked": false
+    },
+    {
+      "name": "backslash_before_at_sign_ends_the_host",
+      "note": "WHATWG: in http(s) URLs a backslash is a path separator, so the host is reddit.com and the path /@evil.com.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com\\@evil.com/",
+      "blocked": true
+    },
+    {
+      "name": "backslashes_after_the_scheme_work_like_slashes",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https:\\\\reddit.com\\",
+      "blocked": true
+    },
+    {
+      "name": "spaces_around_the_url_are_ignored",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "  https://reddit.com/  ",
+      "blocked": true
+    },
+    {
+      "name": "tabs_and_newlines_inside_the_url_are_ignored",
+      "note": "WHATWG removes ASCII tabs and newlines anywhere in a URL.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://red\ndit.com/\t",
+      "blocked": true
+    },
+    {
+      "name": "ftp_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "ftp://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "file_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "file:///C:/reddit.com/index.html",
+      "blocked": false
+    },
+    {
+      "name": "about_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "about:blank",
+      "blocked": false
+    },
+    {
+      "name": "data_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "data:text/html,reddit.com",
+      "blocked": false
+    },
+    {
+      "name": "browser_page_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "chrome://settings/?search=reddit.com",
+      "blocked": false
+    },
+    {
+      "name": "extension_page_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "chrome-extension://abcdefghijklmnopabcdefghijklmnop/block.html?site=reddit.com",
+      "blocked": false
+    },
+    {
+      "name": "url_without_a_scheme_is_not_blocked",
+      "note": "Input must be an absolute URL, as a browser reports it; a bare host doesn't parse as one.",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "reddit.com",
+      "blocked": false
+    },
+    {
+      "name": "scheme_relative_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "//reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "empty_url_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "",
+      "blocked": false
+    },
+    {
+      "name": "url_without_a_host_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://",
+      "blocked": false
+    },
+    {
+      "name": "url_with_a_space_in_the_host_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit com/",
+      "blocked": false
+    },
+    {
+      "name": "url_with_an_invalid_port_is_not_blocked",
+      "targets": [{ "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com:99999/",
+      "blocked": false
+    },
+    {
+      "name": "app_target_does_not_block_a_site",
+      "note": "reddit.com is also a valid Windows executable name; app targets never block websites.",
+      "targets": [{ "kind": "app", "name": "Reddit", "ids": { "windows_exe": "reddit.com" } }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "site_target_next_to_an_app_target_still_blocks",
+      "targets": [{ "kind": "app", "name": "Steam", "ids": { "windows_exe": "steam.exe" } }, { "kind": "site", "pattern": "reddit.com" }],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "empty_blocklist_blocks_nothing",
+      "targets": [],
+      "exceptions": [],
+      "url": "https://reddit.com/",
+      "blocked": false
+    },
+    {
+      "name": "any_matching_target_blocks",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }, { "kind": "site", "pattern": "reddit.com" }, { "kind": "site", "pattern": "x.com" }],
+      "exceptions": [],
+      "url": "https://old.reddit.com/",
+      "blocked": true
+    },
+    {
+      "name": "no_matching_target_blocks_nothing",
+      "targets": [{ "kind": "site", "pattern": "youtube.com/shorts" }, { "kind": "site", "pattern": "reddit.com" }, { "kind": "site", "pattern": "x.com" }],
+      "exceptions": [],
+      "url": "https://example.org/",
+      "blocked": false
+    }
+  ]
+}
