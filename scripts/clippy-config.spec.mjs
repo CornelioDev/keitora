@@ -28,7 +28,8 @@ const CRATES = ["crates/keitora-core/clippy.toml", "crates/keitora-ipc/clippy.to
 /**
  * What the crates ban on top of the root file, as AGENTS.md's "Hard rules" say: no system
  * clock, no `std::process`, no network, no other OS dependencies (L5 and L2 of the security
- * reviews), and no name resolution (L-3 of the T-1.4 review).
+ * reviews), no name resolution (L-3 of the T-1.4 review), and no path resolution: paths are
+ * compared as text, never opened, resolved or looked at on disk (#11 in the threat model, T-1.5).
  */
 const PURE_BANS = {
   "disallowed-methods": [
@@ -56,6 +57,24 @@ const PURE_BANS = {
     "std::fs::write",
     "std::fs::File::open",
     "std::fs::File::create",
+    "std::fs::canonicalize",
+    "std::path::Path::canonicalize",
+    "std::path::absolute",
+    "std::env::current_dir",
+    "std::fs::read_link",
+    "std::path::Path::read_link",
+    "std::fs::metadata",
+    "std::path::Path::metadata",
+    "std::fs::symlink_metadata",
+    "std::path::Path::symlink_metadata",
+    "std::fs::exists",
+    "std::path::Path::exists",
+    "std::path::Path::try_exists",
+    "std::path::Path::is_file",
+    "std::path::Path::is_dir",
+    "std::path::Path::is_symlink",
+    "std::fs::read_dir",
+    "std::path::Path::read_dir",
     "std::net::ToSocketAddrs::to_socket_addrs",
     "url::Url::socket_addrs",
   ],
