@@ -175,9 +175,97 @@ fn decode_unreserved_rejects_everything_else() {
 }
 
 #[test]
-fn without_trailing_dot_removes_one_dot_from_domains_only() {
-    assert_eq!(without_trailing_dot(domain("a.com..")), domain("a.com."));
-    assert_eq!(without_trailing_dot(localhost()), localhost());
+fn canonical_ip_turns_ipv4_mapped_addresses_into_ipv4_only() {
+    let mapped = Host::<String>::Ipv6(Ipv4Addr::LOCALHOST.to_ipv6_mapped());
+    assert_eq!(canonical_ip(mapped), localhost());
+    let loopback = Host::<String>::Ipv6(Ipv6Addr::LOCALHOST);
+    assert_eq!(canonical_ip(loopback.clone()), loopback);
+    assert_eq!(canonical_ip(localhost()), localhost());
+    assert_eq!(canonical_ip(domain("a.com")), domain("a.com"));
+}
+
+#[test]
+fn rule_reads_an_ipv4_mapped_address_as_ipv4() {
+    assert_eq!(rule("[::ffff:7f00:1]").map(|r| r.host), Some(localhost()));
+}
+
+#[test]
+fn page_ignores_every_trailing_dot_of_its_host() {
+    let page = Page::parse("https://old.reddit.com.../").expect("a web URL");
+    assert_eq!(page.host, domain("old.reddit.com"));
+    for input in ["https://./", "https://../", "https://.../"] {
+        assert!(Page::parse(input).is_none(), "{input:?}");
+    }
+}
+
+#[test]
+fn page_reads_an_ipv4_mapped_address_as_ipv4() {
+    let page = Page::parse("http://[::ffff:127.0.0.1]/").expect("a web URL");
+    assert_eq!(page.host, localhost());
+}
+
+#[test]
+fn ambiguous_paths_have_double_slashes_encoded_slashes_or_parameters() {
+    for path in ["//a", "/a//", "/a%2fb", "/a%5cb", "/a;b", "/;"] {
+        assert!(is_ambiguous(path), "{path:?}");
+    }
+    for path in ["/", "/a/b", "/a%2eb", "/a%25b", "/a%2"] {
+        assert!(!is_ambiguous(path), "{path:?}");
+    }
+}
+
+#[test]
+fn lenient_readings_combine_the_three_steps_in_order() {
+    assert_eq!(
+        lenient_readings("//feed%2f..;x/shorts"),
+        [
+            "//feed%2f..;x/shorts",
+            "/feed%2f..;x/shorts",
+            "//feed%2f../shorts",
+            "/feed%2f../shorts",
+            "//feed/..;x/shorts",
+            "/feed/..;x/shorts",
+            "//shorts",
+            "/shorts",
+        ]
+    );
+}
+
+#[test]
+fn decode_slashes_reads_encoded_slashes_and_backslashes_as_slashes() {
+    assert_eq!(decode_slashes("/a%2fb%5cc%25d"), "/a/b/c%25d");
+}
+
+#[test]
+fn strip_parameters_removes_them_from_each_segment() {
+    assert_eq!(strip_parameters("/a;x/b;y;z/c;"), "/a/b/c");
+    assert_eq!(strip_parameters("/;x"), "/");
+    assert_eq!(strip_parameters("/a/b"), "/a/b");
+}
+
+#[test]
+fn collapse_slashes_merges_runs_of_slashes() {
+    assert_eq!(collapse_slashes("///a//b/c///"), "/a/b/c/");
+}
+
+#[test]
+fn resolve_dot_segments_works_as_whatwg_does() {
+    assert_eq!(resolve_dot_segments("/a/b/../c"), "/a/c");
+    assert_eq!(resolve_dot_segments("/a/./b"), "/a/b");
+    assert_eq!(resolve_dot_segments("/a/.."), "/");
+    assert_eq!(resolve_dot_segments("/a/."), "/a/");
+    assert_eq!(resolve_dot_segments("/../../a"), "/a");
+    assert_eq!(resolve_dot_segments("/"), "/");
+    assert_eq!(resolve_dot_segments("//a"), "//a");
+    assert_eq!(resolve_dot_segments("/a/..;/b"), "/a/..;/b");
+}
+
+#[test]
+fn is_usable_agrees_with_rule_parse() {
+    for pattern in ["reddit.com", "*.x.com/a", "[::1]", " ", "https://x.com"] {
+        let pattern = SitePattern::new(pattern);
+        assert_eq!(is_usable(&pattern), Rule::parse(&pattern).is_some());
+    }
 }
 
 #[test]

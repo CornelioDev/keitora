@@ -56,6 +56,14 @@
 //! 👨‍👩‍👧, and the zero-width non-joiner (U+200C) in some scripts. An id is
 //! stricter still: ASCII letters, digits and `-` only.
 //!
+//! ## Site patterns
+//!
+//! A site pattern must also be one the site rule matcher can use: a host,
+//! with an optional `*.` before it and an optional path after it, and nothing
+//! else, as [`SitePattern::check`] says. Validation and matching share one
+//! parser, so a pattern that passes validation never silently matches
+//! nothing.
+//!
 //! ## Application paths
 //!
 //! [`AppIdentifiers::windows_path`] is opaque text that is only ever compared
@@ -196,7 +204,8 @@ impl AppIdentifiers {
 /// `youtube.com/shorts`.
 ///
 /// In JSON it is a plain string. This type only holds the text; what a
-/// pattern matches is decided by the site rule matcher.
+/// pattern matches is decided by the site rule matcher, in
+/// [`crate::site`], and [`SitePattern::check`] tells if it can use it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SitePattern(String);
@@ -212,6 +221,27 @@ impl SitePattern {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Checks the pattern exactly as [`Blocklist::validate`] checks each
+    /// site target and exception: that its text is valid (see the module
+    /// documentation) and that the site rule matcher can use it.
+    ///
+    /// # Errors
+    ///
+    /// In this order: [`ValidationErrorKind::Empty`] for an empty pattern,
+    /// [`ValidationErrorKind::TooLong`] above [`MAX_PATTERN_LEN`],
+    /// [`ValidationErrorKind::ControlCharacter`] for a control character,
+    /// and [`ValidationErrorKind::NotASitePattern`] for a pattern the matcher
+    /// can't use, such as one with a scheme, a port or no host (the
+    /// [`crate::site`] module documentation lists them all).
+    pub fn check(&self) -> Result<(), ValidationErrorKind> {
+        check_text(&self.0, MAX_PATTERN_LEN)?;
+        if crate::site::is_usable(self) {
+            Ok(())
+        } else {
+            Err(ValidationErrorKind::NotASitePattern)
+        }
     }
 }
 
@@ -331,7 +361,8 @@ impl Blocklist {
             })?;
         }
         for (index, exception) in self.exceptions.iter().enumerate() {
-            check_text(exception.as_str(), MAX_PATTERN_LEN)
+            exception
+                .check()
                 .map_err(|kind| ValidationError::new(format!("exceptions[{index}]"), kind))?;
         }
         Ok(())
@@ -404,6 +435,10 @@ pub enum ValidationErrorKind {
     NotADrivePath,
     /// The application sets no identifier for any platform.
     NoIdentifier,
+    /// The site pattern is not one the site rule matcher can use: it has no
+    /// host, or a scheme, a port, user info, an empty label, a misplaced `*`,
+    /// a query or a fragment (see [`SitePattern::check`]).
+    NotASitePattern,
 }
 
 impl fmt::Display for ValidationErrorKind {
@@ -426,6 +461,9 @@ impl fmt::Display for ValidationErrorKind {
                 f.write_str("is not a full path that starts with a drive, such as C:\\")
             }
             Self::NoIdentifier => f.write_str("sets no identifier for any platform"),
+            Self::NotASitePattern => f.write_str(
+                "is not a site pattern such as example.com, *.example.com or example.com/path",
+            ),
         }
     }
 }
@@ -437,9 +475,7 @@ const NOT_IN_FILE_NAMES: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*
 /// Checks a target; on error, also returns the field's path inside it.
 fn validate_target(target: &Target) -> Result<(), (&'static str, ValidationErrorKind)> {
     match target {
-        Target::Site { pattern } => {
-            check_text(pattern.as_str(), MAX_PATTERN_LEN).map_err(|kind| ("pattern", kind))
-        }
+        Target::Site { pattern } => pattern.check().map_err(|kind| ("pattern", kind)),
         Target::App { name, ids } => {
             check_text(name, MAX_NAME_LEN).map_err(|kind| ("name", kind))?;
             validate_ids(ids)
