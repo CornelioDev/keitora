@@ -19,6 +19,12 @@ updates:
     groups:
       npm-minor:
         update-types: ["minor", "patch"]
+    ignore:
+      # `@types/node` follows the Node version CI runs (`node-version` in
+      # `.github/workflows/ci.yml`). A newer major would type APIs that don't
+      # exist at runtime, so it moves by hand, together with that version.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
