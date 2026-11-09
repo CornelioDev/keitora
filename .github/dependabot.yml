@@ -32,3 +32,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci(deps)"
+    groups:
+      # Every `github/codeql-action` step in a workflow must use the same
+      # version, or the job fails; `init`, `analyze` and `upload-sarif` move
+      # together.
+      codeql-action:
+        patterns: ["github/codeql-action", "github/codeql-action/*"]
