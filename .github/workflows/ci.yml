@@ -51,7 +51,7 @@ jobs:
       # action's commit. `fallback: none` makes it fail on a version it doesn't
       # know, instead of getting that version without a recorded checksum.
       - name: Install just and cargo-deny
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: just@1.59.0,cargo-deny@0.20.2
           fallback: none
@@ -92,7 +92,7 @@ jobs:
         run: rustup toolchain install
 
       - name: Install just and cargo-llvm-cov
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: just@1.59.0,cargo-llvm-cov@0.9.1
           fallback: none
@@ -129,7 +129,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: just@1.59.0
           fallback: none
