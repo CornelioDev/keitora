@@ -9,11 +9,13 @@
 //! Everything lives in `keitora_core::app`, compiled in every build (no
 //! `cfg(test)` or feature gate):
 //!
-//! - `ProtectedProcesses::new(windows_dir: &str, service_exe: &str) ->
+//! - `ProtectedProcesses::new(windows_dir: &str, keitora_exes: &[&str]) ->
 //!   ProtectedProcesses`: the processes that are never blocked. The service
 //!   passes the Windows directory (from `GetSystemWindowsDirectoryW`, such as
-//!   `C:\Windows`, never hard-coded) and the full path of its own executable.
-//!   It never fails.
+//!   `C:\Windows`, never hard-coded) and the full paths of Keitora's own
+//!   executables: the service itself, the desktop app and the native
+//!   messaging host. Only the paths given are protected; an empty slice, or
+//!   empty strings in it, protect nothing extra. It never fails.
 //! - `ProtectedProcesses::is_protected(&self, image_path: &str) -> bool`.
 //! - `AppMatcher::new(blocklist: &Blocklist, protected: &ProtectedProcesses)
 //!   -> AppMatcher`. It never fails, and doesn't need the blocklist to have
@@ -36,9 +38,12 @@
 //!
 //! Matching is textual: nothing is opened, resolved or looked up (#11).
 //!
-//! 1. A leading `\\?\` or `\??\` before a drive letter is ignored, in image
-//!    paths and in the two `ProtectedProcesses::new` inputs.
-//! 2. `/` and `\` are the same separator.
+//! 1. A leading `\\?\`, `\??\` or `\\.\` before a drive letter is ignored,
+//!    in image paths and in the `ProtectedProcesses::new` inputs.
+//! 2. `/` and `\` are the same separator, and after the drive (`C:\`) a run
+//!    of separators counts as one: `C:\Windows\\explorer.exe` is
+//!    `C:\Windows\explorer.exe`, as in Win32, and no file can be named so
+//!    as to differ. The leading `\\` of a UNC path stays as it is.
 //! 3. Letter case is ignored one character at a time, as NTFS does with its
 //!    upcase table: `É` equals `é`, `Ж` equals `ж`. No other folding: `ß` is
 //!    not `SS`, the Kelvin sign `K` (U+212A) is not `K`, `İ` (U+0130) is not
@@ -49,23 +54,36 @@
 //!    spaces (`C:\Windows.\` and `C:\Windows \` are other folders), no 8.3
 //!    short names (`PROGRA~1`), no `.`/`..`, no wildcards.
 //! 5. A name target (`windows_exe`) equals the image path's whole file name,
-//!    the text after its last separator. A path target (`windows_path`)
+//!    the text after its last separator; no extension is added, so `steam`
+//!    doesn't block `steam.exe` (maintainer, 2026-11-09). A path target (`windows_path`)
 //!    equals the whole image path: never a prefix (`C:\` passes validation
 //!    and must match nothing real), never a suffix.
 //! 6. An app target with both identifiers blocks a process matching either
-//!    ("match by path as well as name", `docs/threat-model.md`).
+//!    ("match by path as well as name", `docs/threat-model.md`; confirmed by
+//!    the maintainer, 2026-11-09).
 //! 7. Only full paths are ever blocked: a drive path (with or without
-//!    `\\?\`/`\??\`) or a UNC path (`\\server\share\…`, `\\?\UNC\…`), which
+//!    `\\?\`/`\??\`/`\\.\`) or a UNC path (`\\server\share\…`, `\\?\UNC\…`), which
 //!    name targets still block. An empty, bare, relative, drive-relative or
 //!    rooted path, including an NT path such as `\Device\HarddiskVolume3\…`,
 //!    is never blocked: the matcher can't tell whether it is a protected
 //!    process, so it fails toward not blocking.
 //!
-//! Left to the developer (not pinned): whether a name target without an
-//! extension (`steam`) matches `steam.exe`; whether Keitora's other
-//! executables (desktop app, native messaging host) are protected; more
-//! protected processes than the minimum listed below; `..` and repeated
-//! separators; `\\.\` prefixes; `ı` (U+0131).
+//! Left to the developer (not pinned): more protected processes than the
+//! minimum listed below, such as the `SysWOW64` copies of protected programs
+//! (that folder is admin-only, so protecting them is safe, but which exist
+//! varies); `.` and `..` segments; `ı` (U+0131), as NTFS's own mapping of
+//! it isn't confirmed. `QueryFullProcessImageNameW` produces none of these.
+//!
+//! # Maintainer decisions (2026-11-09)
+//!
+//! - **D1** — name and path in one app target: OR (rule 6).
+//! - **D2** — a name target without an extension doesn't block the `.exe`:
+//!   exact file name only (rule 5).
+//! - **D3** — all three Keitora executables are protected by full path: the
+//!   service, the desktop app and the native messaging host. A copy of any
+//!   of them elsewhere, or renamed, is not.
+//! - **D4** — the protected list includes `sihost`, `ctfmon`, `fontdrvhost`,
+//!   `LogonUI`, `userinit`, `taskhostw`, `conhost` and `RuntimeBroker`.
 //!
 //! # Accepted limitation (F0 review, L3)
 //!
@@ -93,24 +111,29 @@
 //!   `name_target_ignores_unicode_letter_case_one_character_at_a_time`,
 //!   `name_target_matches_the_whole_file_name_only`,
 //!   `name_target_has_no_wildcards`,
+//!   `name_target_without_an_extension_does_not_block_the_exe` (D2),
 //!   `name_target_reads_both_slash_kinds_as_separators`,
 //!   `name_target_blocks_device_prefixed_and_network_image_paths`.
 //! - **AC2 — path**: `path_target_blocks_exactly_that_executable`,
 //!   `path_target_ignores_letter_case`,
 //!   `path_target_reads_both_slash_kinds_as_separators`,
 //!   `path_target_blocks_device_prefixed_forms_of_the_same_path`,
-//!   `name_and_path_together_block_a_process_matching_either`.
+//!   `name_and_path_together_block_a_process_matching_either` (D1),
+//!   `repeated_separators_count_as_one_in_targets`.
 //! - **AC3 — protected processes are never blocked (`explorer.exe`,
 //!   `csrss.exe`, `winlogon.exe`, the service itself, …)**:
-//!   `every_listed_system_process_is_protected_against_any_target`,
-//!   `service_itself_is_protected_against_any_target`,
+//!   `every_listed_system_process_is_protected_against_any_target` (D4),
+//!   `every_keitora_executable_is_protected_against_any_target` (D3),
 //!   `protected_path_is_protected_whatever_the_blocklist`,
 //!   `protection_ignores_case_slash_kind_and_device_prefix`,
 //!   `windows_directory_comes_from_the_caller`,
-//!   `service_path_input_is_read_like_an_image_path`,
+//!   `keitora_executable_inputs_are_read_like_image_paths`,
+//!   `only_the_keitora_executables_given_are_protected` (D3),
+//!   `empty_keitora_executable_list_protects_nothing_extra` (D3),
 //!   `protection_is_a_list_not_a_folder`.
 //! - **S1 — #8, protection by full path only**:
 //!   `executable_with_a_protected_name_in_another_folder_is_not_protected`,
+//!   `copies_of_keitora_executables_are_not_protected` (D3),
 //!   `lookalike_paths_never_inherit_protection`.
 //! - **S2 — #11, never opens or resolves a path**:
 //!   `paths_are_compared_as_text_whether_or_not_they_exist`,
@@ -158,6 +181,15 @@ const WINDOWS: &str = r"C:\Windows";
 
 /// The service's own executable in most tests.
 const SERVICE: &str = r"C:\Program Files\Keitora\keitora-service.exe";
+
+/// The desktop app's executable in most tests.
+const DESKTOP: &str = r"C:\Program Files\Keitora\Keitora.exe";
+
+/// The native messaging host's executable in most tests.
+const NMH: &str = r"C:\Program Files\Keitora\keitora-nmh.exe";
+
+/// All three Keitora executables, as the service passes them.
+const KEITORA_EXES: [&str; 3] = [SERVICE, DESKTOP, NMH];
 
 /// Processes in the Windows directory that are always protected.
 const PROTECTED_IN_WINDOWS_DIR: &[&str] = &["explorer.exe"];
@@ -235,7 +267,14 @@ fn site(pattern: &str) -> Target {
 }
 
 fn protected() -> ProtectedProcesses {
-    ProtectedProcesses::new(WINDOWS, SERVICE)
+    ProtectedProcesses::new(WINDOWS, &KEITORA_EXES)
+}
+
+/// The file name of a full path written with `\`.
+fn file_name(path: &str) -> &str {
+    path.rsplit('\\')
+        .next()
+        .expect("rsplit always yields at least one piece")
 }
 
 fn matcher(targets: &[Target]) -> AppMatcher {
@@ -368,6 +407,29 @@ fn name_target_matches_the_whole_file_name_only() {
 }
 
 #[test]
+fn name_target_without_an_extension_does_not_block_the_exe() {
+    // Maintainer decision D2: the exact file name only, no `.exe` added.
+    for (exe, image) in [
+        ("steam", r"C:\Games\steam.exe"),
+        ("STEAM", r"C:\Games\steam.exe"),
+        ("steam.", r"C:\Games\steam.exe"),
+        ("steam.exe", r"C:\Games\steam"),
+        ("discord", r"C:\Users\Ana\AppData\Local\Discord\Discord.exe"),
+    ] {
+        assert_ne!(
+            verdict(&[by_name(exe)], image),
+            AppVerdict::Blocked,
+            "{exe} must not block {image}"
+        );
+    }
+    // A program whose file really has no extension is blocked by that name.
+    assert_eq!(
+        verdict(&[by_name("steam")], r"C:\Games\steam"),
+        AppVerdict::Blocked
+    );
+}
+
+#[test]
 fn name_target_has_no_wildcards() {
     // Validation rejects `*` and `?` in a file name; an unvalidated
     // blocklist still never treats them as wildcards.
@@ -403,6 +465,7 @@ fn name_target_blocks_device_prefixed_and_network_image_paths() {
     for image in [
         r"\\?\C:\Games\steam.exe",
         r"\??\C:\Games\steam.exe",
+        r"\\.\C:\Games\steam.exe",
         r"\\server\share\Games\steam.exe",
         r"\\?\UNC\server\share\Games\steam.exe",
     ] {
@@ -466,11 +529,39 @@ fn path_target_reads_both_slash_kinds_as_separators() {
 }
 
 #[test]
+fn repeated_separators_count_as_one_in_targets() {
+    let path = r"C:\Games\Steam\steam.exe";
+    for image in [
+        r"C:\Games\\Steam\steam.exe",
+        r"C:\\Games\Steam\steam.exe",
+        r"C:\Games\\\Steam//steam.exe",
+        r"C:\Games/\Steam\/steam.exe",
+        r"\\?\C:\Games\Steam\\steam.exe",
+    ] {
+        assert_eq!(
+            verdict(&[by_path(path)], image),
+            AppVerdict::Blocked,
+            "{path} should block {image}"
+        );
+        assert_eq!(
+            verdict(&[by_name("steam.exe")], image),
+            AppVerdict::Blocked,
+            "steam.exe should block {image}"
+        );
+    }
+    assert_eq!(
+        verdict(&[by_path(r"C:\Games\\Steam//steam.exe")], path),
+        AppVerdict::Blocked
+    );
+}
+
+#[test]
 fn path_target_blocks_device_prefixed_forms_of_the_same_path() {
     let targets = [by_path(r"C:\Games\Steam\steam.exe")];
     for image in [
         r"\\?\C:\Games\Steam\steam.exe",
         r"\??\C:\Games\Steam\steam.exe",
+        r"\\.\C:\Games\Steam\steam.exe",
     ] {
         assert_eq!(
             verdict(&targets, image),
@@ -626,25 +717,115 @@ fn every_listed_system_process_is_protected_against_any_target() {
 }
 
 #[test]
-fn service_itself_is_protected_against_any_target() {
-    assert!(protected().is_protected(SERVICE));
-    for targets in [
-        vec![by_name("keitora-service.exe")],
-        vec![by_path(SERVICE)],
-        vec![by_both("keitora-service.exe", SERVICE)],
-    ] {
+fn every_keitora_executable_is_protected_against_any_target() {
+    // Maintainer decision D3: the service, the desktop app and the native
+    // messaging host.
+    let protected = protected();
+    for path in KEITORA_EXES {
+        assert!(protected.is_protected(path), "{path} must be protected");
+        let name = file_name(path);
+        let every_target = [by_name(name), by_path(path), by_both(name, path)];
+        for target in &every_target {
+            assert_eq!(
+                verdict(std::slice::from_ref(target), path),
+                AppVerdict::Protected,
+                "{path} must be protected against {target:?}"
+            );
+        }
         assert_eq!(
-            verdict(&targets, SERVICE),
+            verdict(&every_target, path),
             AppVerdict::Protected,
-            "the service must be protected against {targets:?}"
+            "{path} must be protected against all its targets at once"
         );
+    }
+}
+
+#[test]
+fn only_the_keitora_executables_given_are_protected() {
+    // Each executable is protected only when it is passed in, wherever it
+    // is installed.
+    for (index, given) in KEITORA_EXES.iter().enumerate() {
+        let protected = ProtectedProcesses::new(WINDOWS, &[*given]);
+        let matcher = AppMatcher::new(
+            &blocklist(KEITORA_EXES.iter().map(|path| by_path(path)).collect()),
+            &protected,
+        );
+        for (other, path) in KEITORA_EXES.iter().enumerate() {
+            let want = if other == index {
+                AppVerdict::Protected
+            } else {
+                AppVerdict::Blocked
+            };
+            assert_eq!(
+                matcher.verdict(path),
+                want,
+                "given {given}, checking {path}"
+            );
+        }
+    }
+
+    let custom = [
+        r"D:\Tools\Keitora\keitora-service.exe",
+        r"D:\Tools\Keitora\Keitora.exe",
+        r"D:\Tools\Keitora\keitora-nmh.exe",
+    ];
+    let protected = ProtectedProcesses::new(WINDOWS, &custom);
+    for path in custom {
+        assert!(protected.is_protected(path), "{path} must be protected");
+    }
+    for path in KEITORA_EXES {
+        assert!(
+            !protected.is_protected(path),
+            "{path} must not be protected when Keitora is in D:\\Tools"
+        );
+    }
+}
+
+#[test]
+fn empty_keitora_executable_list_protects_nothing_extra() {
+    let images = [
+        "",
+        r"C:\",
+        r"C:\Games\steam.exe",
+        r"\\?\",
+        r"\\server\share\",
+        SERVICE,
+        DESKTOP,
+        NMH,
+    ];
+    let empty_slice: &[&str] = &[];
+    let empty_strings: &[&str] = &["", "", ""];
+    for keitora_exes in [empty_slice, empty_strings] {
+        let protected = ProtectedProcesses::new(WINDOWS, keitora_exes);
+        for image in images {
+            assert!(
+                !protected.is_protected(image),
+                "{keitora_exes:?} must not protect {image:?}"
+            );
+        }
+        // The system processes are still protected.
+        for path in protected_system_paths(WINDOWS) {
+            assert!(protected.is_protected(&path), "{path} must be protected");
+        }
+        // And the Keitora executables can then be blocked like any app.
+        let matcher = AppMatcher::new(
+            &blocklist(vec![
+                by_name("keitora-service.exe"),
+                by_path(DESKTOP),
+                by_both("keitora-nmh.exe", NMH),
+            ]),
+            &protected,
+        );
+        for path in KEITORA_EXES {
+            assert_eq!(matcher.verdict(path), AppVerdict::Blocked, "{path}");
+        }
     }
 }
 
 #[test]
 fn protected_path_is_protected_whatever_the_blocklist() {
     let mut images = protected_system_paths(WINDOWS);
-    images.push(SERVICE.to_owned());
+    images.extend(KEITORA_EXES.iter().map(|path| (*path).to_owned()));
     let blocklists = [
         Vec::new(),
         vec![by_name("steam.exe")],
@@ -681,6 +862,15 @@ fn protection_ignores_case_slash_kind_and_device_prefix() {
         r"C:/Program Files/Keitora/keitora-service.exe",
         r"\\?\C:\Program Files\Keitora\keitora-service.exe",
         r"\??\C:\Program Files\Keitora\keitora-service.exe",
+        r"\\.\C:\Windows\explorer.exe",
+        r"\\.\C:\Program Files\Keitora\Keitora.exe",
+        r"C:\PROGRAM FILES\KEITORA\KEITORA.EXE",
+        r"c:/program files/keitora/KEITORA-NMH.EXE",
+        r"C:\Windows\\explorer.exe",
+        r"C:\\Windows\System32\\\csrss.exe",
+        r"C:/Windows//System32/winlogon.exe",
+        r"\\?\C:\Windows\\System32\smss.exe",
+        r"C:\Program Files\\Keitora\keitora-nmh.exe",
     ] {
         assert!(protected.is_protected(image), "{image} must be protected");
         assert_eq!(
@@ -701,8 +891,10 @@ fn windows_directory_comes_from_the_caller() {
         r"c:\windows",
         r"C:/Windows",
         r"\\?\C:\Windows",
+        r"\\.\C:\Windows",
+        r"C:\\Windows\\",
     ] {
-        let protected = ProtectedProcesses::new(windows_dir, SERVICE);
+        let protected = ProtectedProcesses::new(windows_dir, &KEITORA_EXES);
         for path in protected_system_paths(r"C:\Windows") {
             assert!(
                 protected.is_protected(&path),
@@ -713,7 +905,7 @@ fn windows_directory_comes_from_the_caller() {
 
     // Windows installed elsewhere: its processes are protected, and the
     // usual `C:\Windows` is just a folder (a user may be able to create it).
-    let elsewhere = ProtectedProcesses::new(r"D:\WINNT", SERVICE);
+    let elsewhere = ProtectedProcesses::new(r"D:\WINNT", &KEITORA_EXES);
     for path in protected_system_paths(r"D:\WINNT") {
         assert!(elsewhere.is_protected(&path), "{path} must be protected");
     }
@@ -732,23 +924,30 @@ fn windows_directory_comes_from_the_caller() {
 }
 
 #[test]
-fn service_path_input_is_read_like_an_image_path() {
-    for service in [
+fn keitora_executable_inputs_are_read_like_image_paths() {
+    // `current_exe` may return a `\\?\` path, for instance.
+    let written_otherwise = [
         r"\\?\C:\Program Files\Keitora\keitora-service.exe",
-        r"C:/Program Files/Keitora/keitora-service.exe",
-        r"c:\PROGRAM FILES\keitora\Keitora-Service.exe",
-    ] {
-        let protected = ProtectedProcesses::new(WINDOWS, service);
+        r"C:/Program Files/Keitora/Keitora.exe",
+        r"c:\PROGRAM FILES\keitora\KEITORA-NMH.EXE",
+    ];
+    let protected = ProtectedProcesses::new(WINDOWS, &written_otherwise);
+    for path in KEITORA_EXES {
         assert!(
-            protected.is_protected(SERVICE),
-            "service given as {service:?} must protect {SERVICE}"
+            protected.is_protected(path),
+            "{written_otherwise:?} must protect {path}"
         );
     }
-
-    // A service installed somewhere else is protected there, and only there.
-    let custom = ProtectedProcesses::new(WINDOWS, r"D:\Tools\Keitora\keitora-service.exe");
-    assert!(custom.is_protected(r"D:\Tools\Keitora\keitora-service.exe"));
-    assert!(!custom.is_protected(SERVICE));
+    for given in [
+        r"\??\C:\Program Files\Keitora\keitora-service.exe",
+        r"\\.\C:\Program Files\Keitora\keitora-service.exe",
+        r"C:\Program Files\\Keitora\keitora-service.exe",
+    ] {
+        assert!(
+            ProtectedProcesses::new(WINDOWS, &[given]).is_protected(SERVICE),
+            "{given} must protect {SERVICE}"
+        );
+    }
 }
 
 #[test]
@@ -852,6 +1051,49 @@ fn executable_with_a_protected_name_in_another_folder_is_not_protected() {
 }
 
 #[test]
+fn copies_of_keitora_executables_are_not_protected() {
+    // Maintainer decision D3, with #8: only the installed paths are protected.
+    let protected = protected();
+    for path in KEITORA_EXES {
+        let name = file_name(path);
+        for copy in [
+            format!(r"C:\Users\Ana\Downloads\{name}"),
+            format!(r"C:\Program Files\Keitora\old\{name}"),
+            format!(r"C:\Program Files\Keitora Copy\{name}"),
+            format!(r"D:\Program Files\Keitora\{name}"),
+            format!(r"C:\Program Files\Keitora.\{name}"),
+            format!(r"\\server\share\Keitora\{name}"),
+        ] {
+            assert!(
+                !protected.is_protected(&copy),
+                "{copy} must not be protected"
+            );
+            assert_eq!(
+                verdict(&[by_name(name)], &copy),
+                AppVerdict::Blocked,
+                "{copy} must be blockable by the name {name}"
+            );
+        }
+        // Renamed copies, and other names next to them, aren't protected.
+        for renamed in [
+            format!(r"{path}.bak"),
+            r"C:\Users\Ana\Downloads\keitora-copy.exe".to_owned(),
+            r"C:\Program Files\Keitora\uninstall.exe".to_owned(),
+        ] {
+            assert!(
+                !protected.is_protected(&renamed),
+                "{renamed} must not be protected"
+            );
+            assert_eq!(
+                verdict(&[by_path(&renamed)], &renamed),
+                AppVerdict::Blocked,
+                "{renamed} must be blockable by its path"
+            );
+        }
+    }
+}
+
+#[test]
 fn lookalike_paths_never_inherit_protection() {
     // Paths that look like protected ones but are other files to NTFS. Each
     // is blockable by its own exact path.
@@ -883,7 +1125,7 @@ fn lookalike_paths_never_inherit_protection() {
 
     // A service installed in folders with non-ASCII names: letter case is
     // ignored one character at a time, nothing more.
-    let strasse = ProtectedProcesses::new(WINDOWS, "D:\\Stra\u{df}e\\keitora-service.exe");
+    let strasse = ProtectedProcesses::new(WINDOWS, &["D:\\Stra\u{df}e\\keitora-service.exe"]);
     assert!(strasse.is_protected("D:\\STRA\u{df}E\\KEITORA-SERVICE.EXE"));
     assert!(
         !strasse.is_protected(r"D:\STRASSE\keitora-service.exe"),
@@ -894,7 +1136,7 @@ fn lookalike_paths_never_inherit_protection() {
         "sharp s is not ss"
     );
 
-    let cafe = ProtectedProcesses::new(WINDOWS, "D:\\Caf\u{e9}\\keitora-service.exe");
+    let cafe = ProtectedProcesses::new(WINDOWS, &["D:\\Caf\u{e9}\\keitora-service.exe"]);
     assert!(cafe.is_protected("D:\\CAF\u{c9}\\keitora-service.exe"));
     assert!(
         !cafe.is_protected("D:\\Cafe\u{301}\\keitora-service.exe"),
@@ -905,7 +1147,7 @@ fn lookalike_paths_never_inherit_protection() {
         "accents are not ignored"
     );
 
-    let kelvin = ProtectedProcesses::new(WINDOWS, r"D:\Keitora\keitora-service.exe");
+    let kelvin = ProtectedProcesses::new(WINDOWS, &[r"D:\Keitora\keitora-service.exe"]);
     assert!(kelvin.is_protected(r"d:\KEITORA\keitora-service.exe"));
     assert!(
         !kelvin.is_protected("D:\\\u{212a}eitora\\keitora-service.exe"),
@@ -931,7 +1173,7 @@ fn paths_are_compared_as_text_whether_or_not_they_exist() {
             "{path}"
         );
     }
-    let nowhere = ProtectedProcesses::new(r"Q:\NoWindows", r"Q:\Nowhere\keitora-service.exe");
+    let nowhere = ProtectedProcesses::new(r"Q:\NoWindows", &[r"Q:\Nowhere\keitora-service.exe"]);
     assert!(nowhere.is_protected(r"Q:\NoWindows\explorer.exe"));
     assert!(nowhere.is_protected(r"Q:\NoWindows\System32\csrss.exe"));
     assert!(nowhere.is_protected(r"Q:\Nowhere\keitora-service.exe"));
@@ -1177,7 +1419,7 @@ fn hostile_constructor_inputs_never_make_it_panic() {
     ];
     for windows_dir in &hostile {
         for service in &hostile {
-            let protected = ProtectedProcesses::new(windows_dir, service);
+            let protected = ProtectedProcesses::new(windows_dir, &[service.as_str()]);
             let matcher = AppMatcher::new(&blocklist(vec![by_name("steam.exe")]), &protected);
             for image in [
                 r"C:\Games\steam.exe",
@@ -1189,6 +1431,16 @@ fn hostile_constructor_inputs_never_make_it_panic() {
                 let _ = protected.is_protected(image);
                 let _ = matcher.verdict(image);
             }
+        }
+    }
+
+    // All of them at once as Keitora executables, and none at all.
+    let all: Vec<&str> = hostile.iter().map(String::as_str).collect();
+    for keitora_exes in [all.as_slice(), &[]] {
+        for windows_dir in &hostile {
+            let protected = ProtectedProcesses::new(windows_dir, keitora_exes);
+            let _ = protected.is_protected(r"C:\Windows\explorer.exe");
+            let _ = protected.is_protected("");
         }
     }
 }
@@ -1392,6 +1644,9 @@ fn verdict_agrees_with_is_blocked_and_is_protected() {
     images.extend(
         [
             SERVICE,
+            DESKTOP,
+            NMH,
+            r"C:\Users\Ana\Keitora.exe",
             r"C:\Games\steam.exe",
             r"C:\Users\Ana\explorer.exe",
             r"C:\Games\Other\game.exe",
