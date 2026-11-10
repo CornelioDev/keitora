@@ -27,6 +27,7 @@ keitora/
 ├── crates/
 │   ├── keitora-core/      # Pure domain logic: model, pomodoro engine, rule matching. No OS deps.
 │   ├── keitora-ipc/       # IPC protocol: message types, versioning, framing. No OS deps.
+│   ├── keitora-sys/       # Safe wrappers around Win32 calls: the only crate with `unsafe`.
 │   ├── keitora-service/   # Windows service: process blocking, persistence, IPC server.
 │   └── keitora-nmh/       # Native messaging host: browser extension ⇄ service bridge.
 ├── apps/desktop/          # Tauri 2 app. `src/` = Vue 3 frontend, `src-tauri/` = Rust IPC client.
@@ -40,7 +41,8 @@ keitora/
 
 - **`keitora-core` and `keitora-ipc` are pure.** No `windows` crate, no `std::process`, no network, no direct system clock. Time comes in through the injectable `Clock` trait. Both crates use `#![forbid(unsafe_code)]`, and their own `clippy.toml` bans reading the clock and `std::process`; it replaces the root one, so it repeats the root's settings.
 - **The UI and the extension are untrusted.** The service validates every incoming message. No client request can shorten, pause, or cancel an active strict session, or edit the blocklist it uses.
-- **`unsafe` lives only in `keitora-service/src/sys/`**, one wrapper per Win32 call, each with a `// SAFETY:` comment.
+- **`unsafe` lives only in `crates/keitora-sys`**, one safe wrapper per Win32 call, each `unsafe` block with a `// SAFETY:` comment ([ADR-0012](docs/adr/0012-isolate-unsafe-code-in-keitora-sys.md)). Every other crate has `#![forbid(unsafe_code)]`.
+- **The service never uses `FakeClock`.** Its one clock is `keitora_service::clock::SystemClock`, created by the service, never chosen by a client. `keitora_core::clock::FakeClock` is for tests: the `clippy.toml` of `keitora-service`, `keitora-nmh`, `keitora-sys` and `keitora-desktop` bans it, and repeats the root settings like the pure crates' own.
 - **No telemetry.** Nothing leaves the user's machine unless a future, opt-in sync feature is explicitly enabled.
 - **Don't build UI from scratch.** Check [shadcn-vue](https://www.shadcn-vue.com) first; custom components only for domain-specific pieces listed in [docs/ui-stack.md](docs/ui-stack.md). Generated `components/ui/*` files are only edited for tokens or variants.
 - **No hard-coded UI strings.** All user-facing text goes through `vue-i18n` (`en` and `es` from day one).

@@ -121,6 +121,6 @@ Parallel loops must not change `keitora-ipc`; protocol changes go through a dedi
 
 ## Release gate
 
-A release may be published as stable only after a **human** security review of `keitora-service`, `keitora-ipc`, `keitora-nmh` and the installer. Until then, releases are tagged as pre-releases (`v0.x.y-beta.n`) and the README says so.
+A release may be published as stable only after a **human** security review of `keitora-service`, `keitora-sys`, `keitora-ipc`, `keitora-nmh` and the installer. Until then, releases are tagged as pre-releases (`v0.x.y-beta.n`) and the README says so.
 
 `release-please` is configured for this: it proposes `-beta.n` versions and marks those GitHub Releases as pre-releases. Configuration alone doesn't hold the gate: text in a commit message, such as a `Release-As:` footer, can override it and produce a version with no `-beta.n`. So whoever merges the release pull request confirms that its title has `-beta.` while the gate holds ([CONTRIBUTING.md](../CONTRIBUTING.md#merging-the-release-pull-request)). It keeps that pull request open, and by rule a release only happens when the maintainer merges it, which nothing enforces. Orchestrators and agents never merge it as part of a task.

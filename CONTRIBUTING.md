@@ -33,7 +33,9 @@ lefthook install
 pnpm install --dir apps/desktop
 pnpm install --dir extension
 
-# Terminal 1: the service, without installing it (an elevated terminal is needed to block processes)
+# Terminal 1: the service, without installing it (an elevated terminal is needed to block processes).
+# It keeps its files in %ProgramData%\Keitora, or in the folder given with --data-dir;
+# Ctrl+C stops it. Release builds have no --console.
 cargo run -p keitora-service -- --console
 
 # Terminal 2: the desktop app
