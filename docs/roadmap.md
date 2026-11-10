@@ -95,7 +95,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
 - [x] **T-1.7** Serializable `EngineState` snapshot, restorable after reboot with correct remaining time.
   - Depends on: T-1.3, T-1.6
   - Security (from the T-1.3 review, ADR-0010): never persist a `MonotonicInstant`; store the active time, the segment's first cycle, the preset and the lock, and checkpoint the active time every few seconds, not only at transitions. Restoring goes through the same validation as `PomodoroPreset::new` (#15), rejects a first cycle outside 1 to `cycles` and a strict session that is paused, and never restores a session that had already ended. Time while the machine was off is never credited to a strict session from the wall clock: changing the date in the firmware must not end it ([#19](https://github.com/CornelioDev/keitora/issues/19)).
-- [ ] **T-1.8** Rustdoc for every public item; crate-level docs with a usage example (`cargo doc` builds without warnings).
+- [~] **T-1.8** Rustdoc for every public item; crate-level docs with a usage example (`cargo doc` builds without warnings).
 
 ## F2 — Windows service (`keitora-service`)
 
