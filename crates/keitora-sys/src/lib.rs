@@ -31,3 +31,46 @@
 pub mod console;
 pub mod library_loader;
 pub mod time;
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Every `.rs` file under `dir`, recursively.
+    fn rust_files(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(dir).expect("couldn't list a folder") {
+            let path = entry.expect("couldn't read a folder entry").path();
+            if path.is_dir() {
+                found.extend(rust_files(&path));
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    /// The `unsafe_code` lint doesn't apply inside a macro expanded in
+    /// another crate, so a macro exported from here could carry `unsafe` into
+    /// crates that forbid it (ADR-0012). This crate exports none, and isn't a
+    /// procedural macro crate either.
+    #[test]
+    fn the_crate_exports_no_macros() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        // Built from pieces, so that this file doesn't match itself.
+        let banned = [concat!("macro", "_export"), concat!("proc", "_macro")];
+        for file in rust_files(&root.join("src")) {
+            let text = fs::read_to_string(&file).expect("couldn't read a source file");
+            for word in banned {
+                assert!(!text.contains(word), "{} contains `{word}`", file.display());
+            }
+        }
+        let manifest =
+            fs::read_to_string(root.join("Cargo.toml")).expect("couldn't read Cargo.toml");
+        assert!(
+            !manifest.contains(concat!("proc", "-macro")),
+            "keitora-sys must not be a procedural macro crate"
+        );
+    }
+}
