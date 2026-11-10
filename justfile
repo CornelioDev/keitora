@@ -27,7 +27,7 @@ set windows-shell := ["cmd.exe", "/d", "/c"]
 export NoDefaultCurrentDirectoryInExePath := "1"
 
 # Run the main checks; stops at the first failure
-check: fmt clippy unit-test-layout test deny desktop extension test-scripts
+check: fmt clippy unit-test-layout test doc deny desktop extension test-scripts
 
 # Check the formatting of the Rust code
 fmt:
@@ -48,6 +48,15 @@ unit-test-layout:
 # Run the Rust tests
 test:
     cargo test --workspace --locked
+
+# `-D warnings` turns rustdoc's warnings, such as a broken or private intra-doc
+# link, into errors. `[env]` sets it for this recipe only, not for `cargo test`,
+# which passes it to the doctests too, and no argument to `just doc` can change it.
+
+# Build the Rust docs; warnings are errors
+[env("RUSTDOCFLAGS", "-D warnings")]
+doc:
+    cargo doc --locked --workspace --no-deps
 
 # Check Rust dependencies: licenses, advisories, duplicates, sources
 deny:

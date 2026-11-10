@@ -85,7 +85,8 @@ The workspace lints that keep panics out of the service also apply to test code,
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 node scripts/check-unit-test-layout.mjs  # unit test convention of keitora-core and keitora-ipc
-cargo test --workspace
+cargo test --workspace                 # doctests included, such as the crate-level examples
+cargo doc --workspace --no-deps        # with RUSTDOCFLAGS="-D warnings"
 cargo deny check                       # licenses, advisories, duplicate deps
 
 # Desktop app (from apps/desktop)

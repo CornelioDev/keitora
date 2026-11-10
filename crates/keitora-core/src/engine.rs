@@ -342,9 +342,10 @@ pub const MAX_RANDOM_TEXT_LEN: u32 = 256;
 /// In JSON it is an object tagged by `kind`: `{ "kind": "none" }`,
 /// `{ "kind": "until_timer_ends" }` or `{ "kind": "random_text", "len": 8 }`.
 /// A `len` is required for `random_text` and rejected for the others (a
-/// `null` one counts as absent); other unknown fields are skipped. Deserializing doesn't check the length's range:
-/// whoever uses the lock calls [`LockKind::validate`], as [`Engine::start`]
-/// and [`Engine::restore`] do.
+/// `null` one counts as absent); other unknown fields are skipped.
+/// Deserializing doesn't check the length's range: whoever uses the lock
+/// calls [`LockKind::validate`], as [`Engine::start`] and [`Engine::restore`]
+/// do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LockKind {

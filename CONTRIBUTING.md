@@ -207,7 +207,7 @@ gh pr merge <number> --squash --delete-branch --author-email <email>
 
 | Check | What it does | Locally |
 |---|---|---|
-| `just check` | Formatting, lints, unit test layout, tests, `cargo deny`, the frontend packages, and the tests of the scripts | `just check` |
+| `just check` | Formatting, lints, unit test layout, tests, the Rust docs (`cargo doc` with warnings as errors), `cargo deny`, the frontend packages, and the tests of the scripts | `just check` |
 | `just coverage` | 90 % of the lines of `keitora-core` and `keitora-ipc`; a report for the frontend packages | `just coverage` |
 | `npm dependencies` | `pnpm audit` of every npm dependency, development ones included | `just npm-dependencies` |
 | `Acceptance tests` | [The rule below](#acceptance-tests-change-only-in-test-commits); pull requests only | `just check-acceptance-tests origin/main` |
