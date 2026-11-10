@@ -51,18 +51,30 @@ const NANOS_PER_TICK: u64 = 100;
 /// The monotonic reading's origin is when the machine started, not counting
 /// time asleep. It never goes backwards, also when several threads share one
 /// clock: each reading is at least the latest one this clock has returned.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SystemClock {
-    /// The latest interrupt time this clock has returned, in 100 ns units.
+    /// The latest interrupt time this clock has read or returned, in 100 ns
+    /// units.
     latest: AtomicU64,
 }
 
 impl SystemClock {
     /// A clock that reads the system's time.
+    ///
+    /// It takes a first reading at once, so that a later failed reading
+    /// stands still at a real time rather than at the origin, from which the
+    /// next good reading would jump by the whole uptime. Should that first
+    /// reading fail too, which Windows documents only for a null pointer,
+    /// the clock starts at the origin.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        Self::starting_at(keitora_sys::time::unbiased_interrupt_time().unwrap_or(0))
+    }
+
+    /// A clock whose latest reading is `ticks`.
+    const fn starting_at(ticks: u64) -> Self {
         Self {
-            latest: AtomicU64::new(0),
+            latest: AtomicU64::new(ticks),
         }
     }
 
@@ -76,6 +88,13 @@ impl SystemClock {
         // never return less than an earlier reading.
         let previous = self.latest.fetch_max(reading, Ordering::Relaxed);
         previous.max(reading)
+    }
+}
+
+impl Default for SystemClock {
+    /// The same as [`SystemClock::new`].
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -114,7 +133,7 @@ mod tests {
 
     #[test]
     fn a_reading_earlier_than_the_latest_returns_the_latest() {
-        let clock = SystemClock::new();
+        let clock = SystemClock::starting_at(0);
         assert_eq!(clock.never_backwards(Some(500)), 500);
         assert_eq!(clock.never_backwards(Some(400)), 500);
         assert_eq!(clock.never_backwards(Some(600)), 600);
@@ -122,10 +141,23 @@ mod tests {
 
     #[test]
     fn a_failed_reading_stands_still() {
-        let clock = SystemClock::new();
+        let clock = SystemClock::starting_at(0);
         assert_eq!(clock.never_backwards(None), 0);
         assert_eq!(clock.never_backwards(Some(700)), 700);
         assert_eq!(clock.never_backwards(None), 700);
+    }
+
+    #[test]
+    fn a_new_clock_starts_at_a_real_reading() {
+        let before = keitora_sys::time::unbiased_interrupt_time().expect("a reading");
+        let clock = SystemClock::new();
+        let after = keitora_sys::time::unbiased_interrupt_time().expect("a reading");
+        // What a failed reading returns right after the clock is created.
+        let start = clock.never_backwards(None);
+        assert!(
+            (before..=after).contains(&start),
+            "{before} <= {start} <= {after}"
+        );
     }
 
     #[test]
