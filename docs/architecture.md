@@ -32,8 +32,8 @@ This document explains how Keitora is put together and why. Decisions are record
 | `keitora-ipc` | Rust lib | Protocol types, versioning, line-delimited JSON framing | `keitora-core`, `serde` |
 | `keitora-sys` | Rust lib | Safe wrappers around Win32 calls, one per call; the only crate with `unsafe` code | `windows-sys` |
 | `keitora-service` | Rust bin + lib | Windows service, persistence, process monitor, pipe server, browser policies | `keitora-core`, `keitora-ipc`, `keitora-sys`, `windows-service`, `rusqlite`, `tokio`, `tracing` |
-| `keitora-nmh` | Rust bin | Native messaging host: stdin/stdout ⇄ pipe | `keitora-ipc`, `keitora-sys` |
-| `apps/desktop` | Tauri app | UI; `src-tauri` forwards commands to the pipe and events to the frontend | `keitora-ipc`, `keitora-sys`, `tauri`, `tauri-specta` |
+| `keitora-nmh` | Rust bin | Native messaging host: stdin/stdout ⇄ pipe | `keitora-ipc`; `keitora-sys` when it needs a Win32 call |
+| `apps/desktop` | Tauri app | UI; `src-tauri` forwards commands to the pipe and events to the frontend | `keitora-ipc`, `tauri`, `tauri-specta`; `keitora-sys` when it needs a Win32 call |
 | `extension` | TS | Applies site rules with `declarativeNetRequest`, shows the block page | — |
 
 Dependencies only point downwards in this table. `keitora-core` never depends on anything platform-specific, which keeps it testable and reusable on Android and iOS later (via `uniffi`).
@@ -89,7 +89,7 @@ Sites are platform-independent. Apps are logical entities with one identifier pe
 ## Storage
 
 - SQLite at `%ProgramData%\Keitora\keitora.db`, migrations with `rusqlite_migration`.
-- Directory ACL: write for `SYSTEM` only, read for users.
+- Directory ACL: write for `SYSTEM` and Administrators only, read for users: a protected DACL that inherits nothing from `C:\ProgramData`, which lets every user create files in its subfolders. Until T-5.3 sets it, any standard user can plant files in `Keitora` and `logs` ([threat-model.md](threat-model.md)).
 - Logs with `tracing` to `%ProgramData%\Keitora\logs`, one file per day (`keitora.YYYY-MM-DD.log`, UTC), the last 14 kept, never blocklists or other user data. If the folder can't be used, logs go to stderr and the service keeps running.
 
 ## Open questions

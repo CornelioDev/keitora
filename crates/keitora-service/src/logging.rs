@@ -15,6 +15,12 @@
 //!   running: refusing to run would let anyone who can break the log folder
 //!   switch off blocking and strict mode. In service mode stderr goes
 //!   nowhere, so those records are lost.
+//! - Until T-5.3 secures the data folder ([`crate::data_dir`]), any standard
+//!   user can create files in the log folder: plant a day's file before the
+//!   service opens it, hold an opportunistic lock on one so that opening or
+//!   deleting it hangs, along with every thread that logs, or steer which
+//!   files the retention deletes through their creation times. If T-5.3's
+//!   checks of the folder fail, logs go to stderr instead.
 //!
 //! # What may be logged
 //!

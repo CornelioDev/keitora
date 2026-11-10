@@ -4,9 +4,14 @@
 //! or the one given with `--data-dir` in console mode.
 //!
 //! Who may write there is decided by its access control list, which the
-//! installer and the service set up later (T-5.3, T-6.1); until then, a
-//! standard user who creates the folder before Keitora is installed can
-//! write to it (`docs/threat-model.md`).
+//! service doesn't set yet. Until T-5.3, `Keitora` and its `logs` folder
+//! inherit from `C:\ProgramData` the right of every standard user to create
+//! files and folders, even when `SYSTEM` creates them, so any user can plant
+//! files there at any time (`docs/threat-model.md`). T-5.3 creates `Keitora`
+//! with a protected, non-inherited DACL (`SYSTEM` and Administrators full
+//! control, Users read only), checks or resets its owner and DACL if it
+//! already exists, and refuses `Keitora` or `logs` if either is a reparse
+//! point.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
