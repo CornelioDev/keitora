@@ -24,7 +24,7 @@ const DEV_SERVER_IN_RELEASE: &str = "this release build would load its interface
 /// # Errors
 ///
 /// Returns an error if this is a release build that would load the interface
-/// from the development server (see [`check_frontend_source`]), or if Tauri
+/// from the development server (see `check_frontend_source`), or if Tauri
 /// fails to start the app or to create its window.
 pub fn run() -> tauri::Result<()> {
     check_frontend_source(cfg!(debug_assertions), tauri::is_dev())?;
