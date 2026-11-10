@@ -64,11 +64,45 @@
 //! is as free as an unlocked one. Typing the text is checked by the layer
 //! above, which owns a random source; core only bounds its length
 //! ([`LockKind::validate`]). [`LockKind`] and [`EngineError`] are
-//! `#[non_exhaustive]`. Saving and restoring a running session (after a
-//! reboot, for example) is T-1.7's.
+//! `#[non_exhaustive]`.
+//!
+//! # Snapshots
+//!
+//! [`Engine::snapshot`] writes down a session as an [`EngineState`], which
+//! serializes with serde, and [`Engine::restore`] turns one back into an
+//! engine, after a reboot for example. The snapshot holds the session's
+//! active time, not a clock reading, so the restored session continues with
+//! exactly the time it had left; time between the two is never counted.
+//! [`Engine::restore`] is the only way from stored data to an engine, and it
+//! rejects anything [`Engine::snapshot`] couldn't have written, such as a
+//! strict session that is paused. `Engine` itself doesn't implement
+//! `Deserialize`.
+//!
+//! ```
+//! use std::time::{Duration, UNIX_EPOCH};
+//!
+//! use keitora_core::clock::FakeClock;
+//! use keitora_core::engine::{Engine, EngineState, LockKind, PomodoroPreset};
+//!
+//! let clock = FakeClock::new(UNIX_EPOCH);
+//! let mut engine = Engine::new();
+//! engine.start(PomodoroPreset::default(), LockKind::UntilTimerEnds, &clock)?;
+//! clock.advance(Duration::from_secs(10 * 60))?;
+//! let stored = serde_json::to_string(&engine.snapshot(&clock))?;
+//!
+//! // After a reboot, on a new clock: 15 minutes of focus are still left.
+//! let clock = FakeClock::new(UNIX_EPOCH);
+//! let state: EngineState = serde_json::from_str(&stored)?;
+//! let engine = Engine::restore(state, &clock)?;
+//! assert_eq!(engine.status(&clock).remaining(), Duration::from_secs(15 * 60));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::fmt;
 use std::time::Duration;
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::clock::{Clock, MonotonicInstant};
 
@@ -94,10 +128,15 @@ const SECS_PER_MIN: u64 = 60;
 /// The durations and number of cycles of a session, always within the
 /// limits above (#15 in `docs/threat-model.md`).
 ///
-/// The only way to build one is [`PomodoroPreset::new`], which rejects values
-/// out of range, or [`PomodoroPreset::default`]; so an engine never runs a
+/// The only ways to build one are [`PomodoroPreset::new`], which rejects
+/// values out of range, [`PomodoroPreset::default`], and deserializing one,
+/// which goes through [`PomodoroPreset::new`]; so an engine never runs a
 /// preset it hasn't checked.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// In JSON it is an object with the four values of [`PomodoroPreset::new`],
+/// in whole minutes: `{ "focus_min": 25, "short_break_min": 5,
+/// "long_break_min": 15, "cycles": 4 }`. All four are required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PomodoroPreset {
     /// Length of each focus, in minutes.
     focus_min: u32,
@@ -173,6 +212,30 @@ impl Default for PomodoroPreset {
             long_break_min: 15,
             cycles: 4,
         }
+    }
+}
+
+/// The four values of a preset as read from JSON, before they are checked.
+#[derive(Deserialize)]
+struct RawPreset {
+    focus_min: u32,
+    short_break_min: u32,
+    long_break_min: u32,
+    cycles: u32,
+}
+
+impl<'de> Deserialize<'de> for PomodoroPreset {
+    /// Reads the four values and checks them with [`PomodoroPreset::new`],
+    /// so a preset out of range is rejected, never clamped.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawPreset::deserialize(deserializer)?;
+        Self::new(
+            raw.focus_min,
+            raw.short_break_min,
+            raw.long_break_min,
+            raw.cycles,
+        )
+        .map_err(D::Error::custom)
     }
 }
 
@@ -275,6 +338,13 @@ pub const MIN_RANDOM_TEXT_LEN: u32 = 1;
 pub const MAX_RANDOM_TEXT_LEN: u32 = 256;
 
 /// How firmly a session is locked against being cut short.
+///
+/// In JSON it is an object tagged by `kind`: `{ "kind": "none" }`,
+/// `{ "kind": "until_timer_ends" }` or `{ "kind": "random_text", "len": 8 }`.
+/// A `len` is required for `random_text` and rejected for the others (a
+/// `null` one counts as absent); other unknown fields are skipped. Deserializing doesn't check the length's range:
+/// whoever uses the lock calls [`LockKind::validate`], as [`Engine::start`]
+/// and [`Engine::restore`] do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LockKind {
@@ -315,6 +385,54 @@ impl LockKind {
     /// Whether the session is strict: only [`LockKind::UntilTimerEnds`] is.
     fn is_strict(self) -> bool {
         matches!(self, Self::UntilTimerEnds)
+    }
+}
+
+// `LockKind` goes through a flat struct in JSON instead of serde's
+// `#[serde(tag = "kind")]`, like `Target` in `crate::model`: an internally
+// tagged enum first copies the whole object, unknown fields included, into a
+// buffer, while a plain struct skips unknown fields without keeping them.
+
+/// The `kind` of a lock in JSON.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LockTag {
+    None,
+    UntilTimerEnds,
+    RandomText,
+}
+
+/// Every field a lock can have in JSON; `len` only for `random_text`.
+#[derive(Serialize, Deserialize)]
+struct LockFields {
+    kind: LockTag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    len: Option<u32>,
+}
+
+impl Serialize for LockKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let (kind, len) = match *self {
+            Self::None => (LockTag::None, None),
+            Self::UntilTimerEnds => (LockTag::UntilTimerEnds, None),
+            Self::RandomText { len } => (LockTag::RandomText, Some(len)),
+        };
+        LockFields { kind, len }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LockKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let LockFields { kind, len } = LockFields::deserialize(deserializer)?;
+        match (kind, len) {
+            (LockTag::RandomText, Some(len)) => Ok(Self::RandomText { len }),
+            (LockTag::RandomText, None) => Err(D::Error::missing_field("len")),
+            (LockTag::None, None) => Ok(Self::None),
+            (LockTag::UntilTimerEnds, None) => Ok(Self::UntilTimerEnds),
+            (LockTag::None | LockTag::UntilTimerEnds, Some(_)) => {
+                Err(D::Error::custom("only a `random_text` lock has a `len`"))
+            }
+        }
     }
 }
 
@@ -802,5 +920,191 @@ impl Engine {
         let session = self.session.as_mut()?;
         let position = session.position(now)?;
         Some((session, position))
+    }
+}
+
+/// A snapshot of an [`Engine`], to be stored and restored after the service
+/// restarts, from [`Engine::snapshot`]; [`Engine::restore`] turns it back into
+/// an engine.
+///
+/// It holds the session's preset, lock, the cycle its schedule counts from,
+/// its active time and whether it is paused (ADR-0010). It never holds a
+/// [`MonotonicInstant`], whose origin changes every time the service starts,
+/// nor a wall-clock time.
+///
+/// # JSON format
+///
+/// A snapshot is written to disk and read back by later versions of the
+/// service, so this format is a contract. With a session:
+///
+/// ```json
+/// {
+///   "session": {
+///     "preset": { "focus_min": 25, "short_break_min": 5, "long_break_min": 15, "cycles": 4 },
+///     "lock": { "kind": "until_timer_ends" },
+///     "first_cycle": 1,
+///     "active": { "secs": 600, "nanos": 0 },
+///     "paused": false
+///   }
+/// }
+/// ```
+///
+/// - `preset`: a [`PomodoroPreset`], checked like [`PomodoroPreset::new`].
+/// - `lock`: a [`LockKind`].
+/// - `first_cycle`: the cycle whose focus began when the active time was
+///   zero: 1, or the cycle after a short break that was skipped.
+/// - `active`: the time the session has run since then, outside pauses, as
+///   serde writes a [`Duration`].
+/// - `paused`: whether the session is paused.
+///
+/// An engine with no session, or whose session is over, writes
+/// `{ "session": null }`; a missing `session` reads as `null` too. Every field
+/// of a session is required: none has a default, so that a missing `lock`
+/// can't turn a strict session into an unlocked one. Unknown fields are
+/// skipped, so a later version may add optional ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineState {
+    /// The session, unless the engine was idle.
+    session: Option<SessionState>,
+}
+
+/// A session in an [`EngineState`]. It is checked only by
+/// [`Engine::restore`], apart from its preset, which is always valid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SessionState {
+    /// Its durations and cycles.
+    preset: PomodoroPreset,
+    /// How firmly it is locked.
+    lock: LockKind,
+    /// The cycle whose focus began when the active time was zero.
+    first_cycle: u32,
+    /// Active time since `first_cycle`'s focus began.
+    active: Duration,
+    /// Whether it is paused.
+    paused: bool,
+}
+
+/// Why [`Engine::restore`] rejected a snapshot. Data the engine wrote never
+/// fails; these mean the stored snapshot was changed or damaged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum RestoreError {
+    /// The lock fails [`LockKind::validate`].
+    #[error("invalid lock: {0}")]
+    InvalidLock(#[from] LockError),
+    /// The first cycle isn't between 1 and the preset's number of cycles.
+    #[error("the first cycle must be 1 to {cycles}, not {first_cycle}")]
+    FirstCycleOutOfRange {
+        /// The stored first cycle.
+        first_cycle: u32,
+        /// The preset's number of cycles.
+        cycles: u32,
+    },
+    /// A strict session that is paused: a strict session can't be paused.
+    #[error("a strict session can't be paused")]
+    PausedStrictSession,
+    /// A strict session counting from a cycle after the first, which would
+    /// cut cycles from it: a strict session can't skip a break.
+    #[error("a strict session counts from cycle 1, not {first_cycle}")]
+    StrictSessionSkippedCycles {
+        /// The stored first cycle.
+        first_cycle: u32,
+    },
+    /// The session's active time reaches the end of its schedule: it had
+    /// ended already, and an ended session is never restored.
+    #[error("the session had already ended")]
+    SessionEnded,
+}
+
+impl Engine {
+    /// A snapshot of the engine now, to store and later give to
+    /// [`Engine::restore`]. It records the session's active time at this
+    /// instant, so the service can take one every few seconds as a
+    /// checkpoint, not only when something changes. Taking it never changes
+    /// the engine.
+    ///
+    /// With no session, or one that is over, the snapshot has no session.
+    #[must_use]
+    pub fn snapshot<C>(&self, clock: &C) -> EngineState
+    where
+        C: Clock + ?Sized,
+    {
+        let now = clock.monotonic();
+        let session = self.current(now).map(|(session, _)| SessionState {
+            preset: session.preset.clone(),
+            lock: session.lock,
+            first_cycle: session.first_cycle,
+            active: session.run.active(now),
+            paused: session.run.is_paused(),
+        });
+        EngineState { session }
+    }
+
+    /// An engine from a snapshot taken by [`Engine::snapshot`], possibly in an
+    /// earlier run of the service. A snapshot with no session gives an idle
+    /// engine.
+    ///
+    /// The session continues on `clock` from exactly the active time stored,
+    /// running or paused as it was: the time between the snapshot and the
+    /// restore, such as while the machine was off, is never counted, and the
+    /// wall clock is never read (ADR-0010). Changing the date, in Windows or in
+    /// the firmware, therefore can't end a strict session.
+    ///
+    /// # Errors
+    ///
+    /// A [`RestoreError`] if the session couldn't have come from
+    /// [`Engine::snapshot`], checked in this order:
+    /// [`RestoreError::InvalidLock`] if the lock fails [`LockKind::validate`],
+    /// [`RestoreError::FirstCycleOutOfRange`] for a first cycle outside 1 to
+    /// the preset's cycles, [`RestoreError::PausedStrictSession`] and
+    /// [`RestoreError::StrictSessionSkippedCycles`] for a strict session
+    /// that is paused or counts from a cycle after 1, and
+    /// [`RestoreError::SessionEnded`] if the session is already over. The
+    /// preset was checked when the snapshot was deserialized.
+    pub fn restore<C>(state: EngineState, clock: &C) -> Result<Self, RestoreError>
+    where
+        C: Clock + ?Sized,
+    {
+        let Some(saved) = state.session else {
+            return Ok(Self::new());
+        };
+        saved.lock.validate()?;
+        let cycles = saved.preset.cycles();
+        if !(1..=cycles).contains(&saved.first_cycle) {
+            return Err(RestoreError::FirstCycleOutOfRange {
+                first_cycle: saved.first_cycle,
+                cycles,
+            });
+        }
+        if saved.lock.is_strict() {
+            if saved.paused {
+                return Err(RestoreError::PausedStrictSession);
+            }
+            if saved.first_cycle != 1 {
+                return Err(RestoreError::StrictSessionSkippedCycles {
+                    first_cycle: saved.first_cycle,
+                });
+            }
+        }
+
+        let now = clock.monotonic();
+        let session = Session {
+            preset: saved.preset,
+            lock: saved.lock,
+            first_cycle: saved.first_cycle,
+            run: if saved.paused {
+                Run::Paused {
+                    active: saved.active,
+                }
+            } else {
+                Run::running(now, saved.active)
+            },
+        };
+        if session.position(now).is_none() {
+            return Err(RestoreError::SessionEnded);
+        }
+        Ok(Self {
+            session: Some(session),
+        })
     }
 }
