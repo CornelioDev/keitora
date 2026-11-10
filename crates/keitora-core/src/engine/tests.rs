@@ -341,3 +341,170 @@ fn strict_refusals_leave_a_paused_free_session_alone_and_messages_exist() {
             .is_empty()
     );
 }
+
+// --- Serde of PomodoroPreset and LockKind -----------------------------------
+
+#[test]
+fn a_preset_reads_back_what_it_writes() {
+    let preset = PomodoroPreset::new(50, 10, 30, 3).expect("in range");
+    let json = serde_json::to_value(&preset).expect("serializes");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "focus_min": 50,
+            "short_break_min": 10,
+            "long_break_min": 30,
+            "cycles": 3,
+        })
+    );
+    let back: PomodoroPreset = serde_json::from_value(json).expect("deserializes");
+    assert_eq!(back, preset);
+}
+
+#[test]
+fn a_preset_out_of_range_is_rejected_with_the_message_of_new() {
+    let json = r#"{ "focus_min": 25, "short_break_min": 31, "long_break_min": 15, "cycles": 4 }"#;
+    let error = serde_json::from_str::<PomodoroPreset>(json).expect_err("out of range");
+    let expected = PomodoroPreset::new(25, 31, 15, 4).expect_err("out of range");
+    assert!(error.to_string().contains(&expected.to_string()), "{error}");
+}
+
+#[test]
+fn every_lock_kind_reads_back_what_it_writes() {
+    for lock in [
+        LockKind::None,
+        LockKind::UntilTimerEnds,
+        LockKind::RandomText { len: 8 },
+        // Out of range: deserializing doesn't check it, `validate` does.
+        LockKind::RandomText { len: 0 },
+    ] {
+        let text = serde_json::to_string(&lock).expect("serializes");
+        let back: LockKind = serde_json::from_str(&text).expect("deserializes");
+        assert_eq!(back, lock, "{text}");
+    }
+}
+
+#[test]
+fn only_a_random_text_lock_has_a_length() {
+    for json in [
+        r#"{ "kind": "none", "len": 8 }"#,
+        r#"{ "kind": "until_timer_ends", "len": 8 }"#,
+        r#"{ "kind": "random_text" }"#,
+        r#"{ "kind": "random_text", "len": null }"#,
+    ] {
+        assert!(
+            serde_json::from_str::<LockKind>(json).is_err(),
+            "{json} must be rejected"
+        );
+    }
+    let lock: LockKind =
+        serde_json::from_str(r#"{ "kind": "until_timer_ends", "len": null, "other": [1, 2] }"#)
+            .expect("a null length and unknown fields are skipped");
+    assert_eq!(lock, LockKind::UntilTimerEnds);
+}
+
+// --- Snapshots ------------------------------------------------------------------
+
+/// A snapshot with a session, built directly.
+fn state(lock: LockKind, first_cycle: u32, active: Duration, paused: bool) -> EngineState {
+    EngineState {
+        session: Some(SessionState {
+            preset: PomodoroPreset::default(),
+            lock,
+            first_cycle,
+            active,
+            paused,
+        }),
+    }
+}
+
+#[test]
+fn snapshot_of_an_idle_or_ended_engine_has_no_session() {
+    let clock = ManualClock::at(mins(3));
+    assert_eq!(
+        Engine::new().snapshot(&clock),
+        EngineState { session: None }
+    );
+    let engine = running(PomodoroPreset::default(), LockKind::None, &clock);
+    clock.set(mins(3 + 130));
+    assert_eq!(engine.snapshot(&clock), EngineState { session: None });
+}
+
+#[test]
+fn snapshot_holds_the_active_time_and_not_the_clock_reading() {
+    let clock = ManualClock::at(mins(1000));
+    let mut engine = running(PomodoroPreset::default(), LockKind::None, &clock);
+    clock.set(mins(1010));
+    engine.pause(&clock).expect("pause");
+    clock.set(mins(2000));
+    assert_eq!(
+        engine.snapshot(&clock),
+        state(LockKind::None, 1, mins(10), true)
+    );
+}
+
+#[test]
+fn restore_continues_from_the_stored_active_time_on_any_clock() {
+    let clock = ManualClock::at(Duration::MAX);
+    let engine =
+        Engine::restore(state(LockKind::None, 2, mins(26), false), &clock).expect("restores");
+    assert_eq!(
+        engine.status(&clock),
+        Status {
+            phase: Phase::ShortBreak,
+            cycle: 2,
+            remaining: mins(4),
+            paused: false,
+        }
+    );
+
+    let clock = ManualClock::at(mins(7));
+    let engine = Engine::restore(EngineState { session: None }, &clock).expect("restores");
+    assert_eq!(engine.status(&clock), Status::IDLE);
+}
+
+#[test]
+fn restore_reports_each_problem_with_its_own_error() {
+    let clock = ManualClock::at(Duration::ZERO);
+    let cases = [
+        (
+            state(LockKind::RandomText { len: 0 }, 9, mins(500), true),
+            RestoreError::InvalidLock(LockError { len: 0 }),
+        ),
+        (
+            state(LockKind::UntilTimerEnds, 0, Duration::ZERO, true),
+            RestoreError::FirstCycleOutOfRange {
+                first_cycle: 0,
+                cycles: 4,
+            },
+        ),
+        (
+            state(LockKind::None, 5, Duration::ZERO, false),
+            RestoreError::FirstCycleOutOfRange {
+                first_cycle: 5,
+                cycles: 4,
+            },
+        ),
+        (
+            state(LockKind::UntilTimerEnds, 2, mins(500), true),
+            RestoreError::PausedStrictSession,
+        ),
+        (
+            state(LockKind::UntilTimerEnds, 2, mins(500), false),
+            RestoreError::StrictSessionSkippedCycles { first_cycle: 2 },
+        ),
+        (
+            state(LockKind::UntilTimerEnds, 1, mins(130), false),
+            RestoreError::SessionEnded,
+        ),
+        (
+            state(LockKind::None, 4, mins(40), true),
+            RestoreError::SessionEnded,
+        ),
+    ];
+    for (state, expected) in cases {
+        let error = Engine::restore(state.clone(), &clock).expect_err("rejected");
+        assert_eq!(error, expected, "{state:?}");
+        assert!(!error.to_string().is_empty(), "{error:?}");
+    }
+}
