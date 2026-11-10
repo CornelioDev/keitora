@@ -374,12 +374,14 @@ fn random_text_session_is_not_strict() {
 
 #[test]
 fn random_text_length_limits_are_pinned() {
-    assert!(
-        MIN_RANDOM_TEXT_LEN >= 1,
-        "a zero-length text is no challenge"
-    );
-    assert!(MIN_RANDOM_TEXT_LEN <= MAX_RANDOM_TEXT_LEN);
-    assert!(MAX_RANDOM_TEXT_LEN <= 1024, "the maximum must be modest");
+    const {
+        assert!(
+            MIN_RANDOM_TEXT_LEN >= 1,
+            "a zero-length text is no challenge"
+        );
+        assert!(MIN_RANDOM_TEXT_LEN <= MAX_RANDOM_TEXT_LEN);
+        assert!(MAX_RANDOM_TEXT_LEN <= 1024, "the maximum must be modest");
+    }
 }
 
 #[test]
