@@ -1,0 +1,46 @@
+# Clippy settings for keitora-service, keitora-nmh, keitora-sys and
+# keitora-desktop (apps/desktop/src-tauri), the crates that aren't pure.
+#
+# Clippy reads only the clippy.toml nearest a crate, so this file replaces the
+# one at the root of the workspace instead of adding to it. It has to repeat
+# every setting of the root file, which keep their meaning here, followed by
+# the bans that apply only to these crates. The four copies are identical, and
+# scripts/clippy-config.spec.mjs (`just test-scripts`) fails if they differ
+# from each other, stop repeating a root setting or set a key the root file
+# doesn't (other than `disallowed-types`). When you change the root file,
+# change these four too, and the two of keitora-core and keitora-ipc.
+
+# --- Repeated from the root clippy.toml ------------------------------------
+
+# A panic is how a test fails, so `unwrap()`, `expect()`, `panic!` and
+# indexing are fine inside `#[test]` functions and `#[cfg(test)]` modules.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# See why each is banned in the root file.
+disallowed-methods = [
+    { path = "slice::split_at", reason = "panics if out of range; use `split_at_checked`" },
+    { path = "slice::split_at_mut", reason = "panics if out of range; use `split_at_mut_checked`" },
+    { path = "str::split_at", reason = "panics if out of range or not on a char boundary; use `split_at_checked`" },
+    { path = "str::split_at_mut", reason = "panics if out of range or not on a char boundary; use `split_at_mut_checked`" },
+    { path = "core::iter::Iterator::sum", reason = "panics on overflow; use `try_fold` with `checked_add`" },
+    { path = "core::iter::Iterator::product", reason = "panics on overflow; use `try_fold` with `checked_mul`" },
+]
+
+# --- These crates only -------------------------------------------------------
+
+# Any mention of these types, not only constructing them, is banned. This also
+# applies to tests: a test that really needs one opts out at the narrowest
+# scope with `#[expect(clippy::disallowed_types, reason = "...")]`.
+#
+# `FakeClock` is a test clock whose time moves only when told to. In the
+# service it would let whoever moves it end a strict session at once, so
+# production code uses the service's real clock
+# (keitora_service::clock::SystemClock) and never this one (T-2.1, F1 security
+# review). Clippy ignores the path in a crate that doesn't depend on
+# keitora-core, until it does.
+disallowed-types = [
+    { path = "keitora_core::clock::FakeClock", reason = "a test clock; production code uses the service's real clock" },
+]
