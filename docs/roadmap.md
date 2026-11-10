@@ -99,7 +99,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
 
 ## F2 — Windows service (`keitora-service`)
 
-- [ ] **T-2.1** Binary with `--console` (development) and service mode (`windows-service`); `tracing` to rotating files in `%ProgramData%\Keitora\logs`.
+- [~] **T-2.1** Binary with `--console` (development) and service mode (`windows-service`); `tracing` to rotating files in `%ProgramData%\Keitora\logs`.
   - Security (from the T-1.3 review, ADR-0010): the engine gets one monotonic clock instance for the whole service, from a 64-bit source that never wraps or goes backwards (`Instant`/QPC or `QueryUnbiasedInterruptTime`, never `GetTickCount`); it never comes from a client and is never `FakeClock`. The service changes the engine only through its methods, never by replacing it with `Engine::default()`.
 - [ ] **T-2.2** SQLite persistence with migrations: blocklists, settings, sessions, history, block events.
   - Depends on: T-1.1
