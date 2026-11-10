@@ -5,6 +5,7 @@
 members = [
     "crates/keitora-core",
     "crates/keitora-ipc",
+    "crates/keitora-sys",
     "crates/keitora-service",
     "crates/keitora-nmh",
     "apps/desktop/src-tauri",
@@ -37,6 +38,15 @@ publish = false
 # named here so that a new default feature isn't picked up unnoticed.
 url = { version = "2.5.8", default-features = false, features = ["std"] }
 
+# Our own crates, used by path. They are never published, so they have no
+# version, and Cargo.lock lists them without a `source`.
+keitora-sys = { path = "crates/keitora-sys" }
+
+# Win32 bindings, used only by keitora-sys (ADR-0012). The 0.61 line is the
+# one windows-service uses, so there is a single copy. Each crate turns on
+# only the API families it calls.
+windows-sys = { version = "0.61.2", default-features = false }
+
 [profile.release]
 # Integer overflow panics, as in debug builds, instead of silently wrapping:
 # a wrapped value in, say, the remaining-time calculation could shorten a
@@ -56,11 +66,12 @@ panic = "unwind"
 missing_docs = "warn"
 # Public types implement `Debug` (Rust API Guidelines, C-DEBUG).
 missing_debug_implementations = "warn"
-# `unsafe` is only allowed in keitora-service/src/sys/, which opts in with an
-# `#[allow(unsafe_code, reason = "...")]` on that module (AGENTS.md, "Hard
-# rules"). It is an error rather than a warning so that even `cargo build`
-# rejects it. keitora-core, keitora-ipc, keitora-nmh and keitora-desktop go
-# further with `#![forbid(unsafe_code)]`, which no `#[allow]` can override.
+# `unsafe` is only allowed in the keitora-sys crate, which opts in with a
+# crate-level `#![allow(unsafe_code, reason = "...")]` (AGENTS.md, "Hard
+# rules"; ADR-0012). It is an error rather than a warning so that even `cargo
+# build` rejects it. Every other crate (keitora-core, keitora-ipc,
+# keitora-service, keitora-nmh and keitora-desktop) goes further with
+# `#![forbid(unsafe_code)]`, which no `#[allow]` can override.
 unsafe_code = "deny"
 # Idioms such as writing `Formatter<'_>` so that borrows are visible.
 rust_2018_idioms = { level = "warn", priority = -1 }
