@@ -284,3 +284,60 @@ fn the_farthest_clock_reading_ends_the_session_without_panicking() {
     clock.set(Duration::MAX);
     assert_eq!(engine.status(&clock), Status::IDLE);
 }
+
+#[test]
+fn lock_validation_bounds_the_random_text_length() {
+    let bad = LockError { len: 0 };
+    assert_eq!(LockKind::RandomText { len: 0 }.validate(), Err(bad));
+    assert_eq!(bad.value(), 0);
+    assert!(bad.to_string().contains('0'));
+    assert_eq!(
+        LockKind::RandomText {
+            len: MAX_RANDOM_TEXT_LEN + 1
+        }
+        .validate(),
+        Err(LockError {
+            len: MAX_RANDOM_TEXT_LEN + 1
+        })
+    );
+    assert_eq!(LockKind::RandomText { len: 8 }.validate(), Ok(()));
+}
+
+#[test]
+fn start_reports_an_invalid_lock_before_anything_else() {
+    let clock = ManualClock::at(Duration::ZERO);
+    let mut engine = running(PomodoroPreset::default(), LockKind::None, &clock);
+    assert_eq!(
+        engine.start(
+            PomodoroPreset::default(),
+            LockKind::RandomText { len: 0 },
+            &clock
+        ),
+        Err(EngineError::InvalidLock(LockError { len: 0 }))
+    );
+}
+
+#[test]
+fn start_over_a_strict_session_is_a_strict_refusal() {
+    let clock = ManualClock::at(Duration::ZERO);
+    let mut engine = running(PomodoroPreset::default(), LockKind::UntilTimerEnds, &clock);
+    assert_eq!(
+        engine.start(PomodoroPreset::default(), LockKind::None, &clock),
+        Err(EngineError::StrictSession)
+    );
+}
+
+#[test]
+fn strict_refusals_leave_a_paused_free_session_alone_and_messages_exist() {
+    let clock = ManualClock::at(Duration::ZERO);
+    let mut engine = running(PomodoroPreset::default(), LockKind::UntilTimerEnds, &clock);
+    assert_eq!(engine.stop(&clock), Err(EngineError::StrictSession));
+    assert_eq!(engine.skip_break(&clock), Err(EngineError::StrictSession));
+    assert_eq!(engine.can_stop(&clock), Err(LockReason::UntilTimerEnds));
+    assert!(!LockReason::UntilTimerEnds.to_string().is_empty());
+    assert!(
+        !EngineError::InvalidLock(LockError { len: 0 })
+            .to_string()
+            .is_empty()
+    );
+}

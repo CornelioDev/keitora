@@ -53,11 +53,19 @@
 //!
 //! # Strict sessions
 //!
-//! A session started with [`LockKind::UntilTimerEnds`] is strict, and can't be
-//! paused. The rest of strict mode, such as refusing to stop a strict session
-//! and the `RandomText` lock, is T-1.6's; it will add variants to [`LockKind`]
-//! and [`EngineError`], which are therefore `#[non_exhaustive]`. Saving and
-//! restoring a running session (after a reboot, for example) is T-1.7's.
+//! A session started with [`LockKind::UntilTimerEnds`] is strict: it is active
+//! until its timer ends, in every phase including the breaks. While it is,
+//! the engine refuses to stop it, pause it, skip a break or start another
+//! session over it ([`EngineError::StrictSession`]), and
+//! [`Engine::can_stop`] and [`Engine::can_edit_blocklist`] say no with a
+//! [`LockReason`]. The instant its timer ends, all of that is allowed again.
+//!
+//! [`LockKind::RandomText`] is friction, not a lock: to the engine its session
+//! is as free as an unlocked one. Typing the text is checked by the layer
+//! above, which owns a random source; core only bounds its length
+//! ([`LockKind::validate`]). [`LockKind`] and [`EngineError`] are
+//! `#[non_exhaustive]`. Saving and restoring a running session (after a
+//! reboot, for example) is T-1.7's.
 
 use std::fmt;
 use std::time::Duration;
@@ -260,24 +268,82 @@ impl fmt::Display for PresetField {
     }
 }
 
+/// The fewest characters a [`LockKind::RandomText`] may ask to type.
+pub const MIN_RANDOM_TEXT_LEN: u32 = 1;
+/// The most characters a [`LockKind::RandomText`] may ask to type (#15 in
+/// `docs/threat-model.md`).
+pub const MAX_RANDOM_TEXT_LEN: u32 = 256;
+
 /// How firmly a session is locked against being cut short.
-///
-/// T-1.6 adds `RandomText { len }`, and may move this type, re-exporting it
-/// here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LockKind {
     /// No lock: the session can be paused and stopped at any time.
     None,
-    /// Strict: the session runs until its timer ends. It can't be paused.
+    /// Strict: the session is active until its timer ends. It can't be
+    /// stopped, paused or shortened, and the blocklist can't be edited.
     UntilTimerEnds,
+    /// Friction, not strict: to stop early the user types `len` random
+    /// characters. The engine treats the session like an unlocked one; the
+    /// layer above generates and checks the text.
+    RandomText {
+        /// Characters to type, from [`MIN_RANDOM_TEXT_LEN`] to
+        /// [`MAX_RANDOM_TEXT_LEN`].
+        len: u32,
+    },
 }
 
 impl LockKind {
-    /// Whether the session is strict.
+    /// Checks the lock is well formed: a `RandomText` length within
+    /// [`MIN_RANDOM_TEXT_LEN`] to [`MAX_RANDOM_TEXT_LEN`]. [`Engine::start`]
+    /// calls it, so a session never runs with an invalid lock.
+    ///
+    /// # Errors
+    ///
+    /// A [`LockError`] for a length out of range; it is never clamped.
+    pub fn validate(&self) -> Result<(), LockError> {
+        match *self {
+            Self::RandomText { len }
+                if !(MIN_RANDOM_TEXT_LEN..=MAX_RANDOM_TEXT_LEN).contains(&len) =>
+            {
+                Err(LockError { len })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether the session is strict: only [`LockKind::UntilTimerEnds`] is.
     fn is_strict(self) -> bool {
         matches!(self, Self::UntilTimerEnds)
     }
+}
+
+/// Why [`LockKind::validate`] rejected a lock: the text length is out of range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[error(
+    "the random text must be {MIN_RANDOM_TEXT_LEN} to {MAX_RANDOM_TEXT_LEN} characters, not {len}"
+)]
+pub struct LockError {
+    /// The rejected length.
+    len: u32,
+}
+
+impl LockError {
+    /// The length that was rejected.
+    #[must_use]
+    pub fn value(&self) -> u32 {
+        self.len
+    }
+}
+
+/// Why a strict session refuses a request, from [`Engine::can_stop`] and
+/// [`Engine::can_edit_blocklist`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum LockReason {
+    /// A strict session is active until its timer ends.
+    #[error("a strict session is active until its timer ends")]
+    UntilTimerEnds,
 }
 
 /// A phase of a session, or [`Phase::Idle`] when there is none.
@@ -364,9 +430,13 @@ pub enum EngineError {
     /// [`Engine::skip_break`] during a focus.
     #[error("only a break can be skipped, and this is a focus")]
     NotABreak,
-    /// [`Engine::pause`] in a strict session ([`LockKind::UntilTimerEnds`]).
-    #[error("a strict session can't be paused")]
+    /// A request that would stop, pause or shorten a strict session
+    /// ([`LockKind::UntilTimerEnds`]), or start another over it.
+    #[error("a strict session can't be stopped, paused or shortened")]
     StrictSession,
+    /// [`Engine::start`] with a lock that fails [`LockKind::validate`].
+    #[error("invalid lock: {0}")]
+    InvalidLock(#[from] LockError),
 }
 
 /// The pomodoro state machine. It holds at most one session, and starts idle.
@@ -530,8 +600,10 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// [`EngineError::AlreadyRunning`] if a session is running or paused. A
-    /// session that is over doesn't count: a new one replaces it.
+    /// [`EngineError::InvalidLock`] if `lock` is invalid,
+    /// [`EngineError::StrictSession`] if a strict session is active, and
+    /// [`EngineError::AlreadyRunning`] if another session is running or
+    /// paused. A session that is over doesn't count: a new one replaces it.
     pub fn start<C>(
         &mut self,
         preset: PomodoroPreset,
@@ -541,9 +613,14 @@ impl Engine {
     where
         C: Clock + ?Sized,
     {
+        lock.validate()?;
         let now = clock.monotonic();
-        if self.current(now).is_some() {
-            return Err(EngineError::AlreadyRunning);
+        if let Some((session, _)) = self.current(now) {
+            return Err(if session.lock.is_strict() {
+                EngineError::StrictSession
+            } else {
+                EngineError::AlreadyRunning
+            });
         }
         self.session = Some(Session {
             preset,
@@ -609,14 +686,18 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// [`EngineError::NoSession`] if there is no session, and
-    /// [`EngineError::NotABreak`] during a focus.
+    /// [`EngineError::NoSession`] if there is no session,
+    /// [`EngineError::StrictSession`] if it is strict (any skip would shorten
+    /// it), and [`EngineError::NotABreak`] during a focus.
     pub fn skip_break<C>(&mut self, clock: &C) -> Result<(), EngineError>
     where
         C: Clock + ?Sized,
     {
         let now = clock.monotonic();
         let (session, position) = self.current_mut(now).ok_or(EngineError::NoSession)?;
+        if session.lock.is_strict() {
+            return Err(EngineError::StrictSession);
+        }
         match position.phase {
             Phase::ShortBreak => {
                 session.first_cycle = position.cycle.saturating_add(1);
@@ -638,16 +719,58 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// [`EngineError::NoSession`] if there is no session.
+    /// [`EngineError::NoSession`] if there is no session, and
+    /// [`EngineError::StrictSession`] if it is strict.
     pub fn stop<C>(&mut self, clock: &C) -> Result<(), EngineError>
     where
         C: Clock + ?Sized,
     {
-        if self.current(clock.monotonic()).is_none() {
-            return Err(EngineError::NoSession);
+        let (session, _) = self
+            .current(clock.monotonic())
+            .ok_or(EngineError::NoSession)?;
+        if session.lock.is_strict() {
+            return Err(EngineError::StrictSession);
         }
         self.session = None;
         Ok(())
+    }
+
+    /// Whether stopping the session now would be allowed.
+    ///
+    /// # Errors
+    ///
+    /// [`LockReason::UntilTimerEnds`] while a strict session is active.
+    /// With no session, or one that is over or not strict, it is `Ok`.
+    pub fn can_stop<C>(&self, clock: &C) -> Result<(), LockReason>
+    where
+        C: Clock + ?Sized,
+    {
+        self.lock_reason(clock)
+    }
+
+    /// Whether the blocklist may be edited now (#18 in
+    /// `docs/threat-model.md`): not while a strict session is active, in any
+    /// of its phases.
+    ///
+    /// # Errors
+    ///
+    /// [`LockReason::UntilTimerEnds`] while a strict session is active.
+    pub fn can_edit_blocklist<C>(&self, clock: &C) -> Result<(), LockReason>
+    where
+        C: Clock + ?Sized,
+    {
+        self.lock_reason(clock)
+    }
+
+    /// The reason a strict session is active, if one is.
+    fn lock_reason<C>(&self, clock: &C) -> Result<(), LockReason>
+    where
+        C: Clock + ?Sized,
+    {
+        match self.current(clock.monotonic()) {
+            Some((session, _)) if session.lock.is_strict() => Err(LockReason::UntilTimerEnds),
+            _ => Ok(()),
+        }
     }
 
     /// What the engine is doing now. Observing never changes the session.
