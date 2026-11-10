@@ -9,6 +9,8 @@
 //! other platforms.
 //!
 //! - [`clock`]: the source of time, and a fake one for tests.
+//! - [`engine`]: the pomodoro state machine that runs a session's focus and
+//!   break phases.
 //! - [`model`]: blocklists, their targets and exceptions, and their validation.
 //! - [`site`]: which URLs a blocklist blocks.
 //! - [`app`]: which running programs a blocklist blocks, and which are never
@@ -18,5 +20,6 @@
 
 pub mod app;
 pub mod clock;
+pub mod engine;
 pub mod model;
 pub mod site;
