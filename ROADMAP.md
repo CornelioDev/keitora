@@ -11,8 +11,8 @@ The first version runs on Windows 10 and 11. It's built in seven stages, in this
 | | Stage | What you get |
 |---|---|---|
 | ✅ | **Foundations** | Project setup, automated checks on every change, and the design of every screen. |
-| 🚧 | **Core rules** | How the timer works, and how Keitora decides which sites and apps to block. |
-| ⏳ | **Background service** | Blocking that keeps working when you close the app, and a session that continues after a restart. |
+| ✅ | **Core rules** | How the timer works, and how Keitora decides which sites and apps to block. |
+| 🚧 | **Background service** | Blocking that keeps working when you close the app, and a session that continues after a restart. |
 | ⏳ | **Desktop app** | The timer, your blocklists, settings and history, a tray icon and notifications, in English and Spanish. |
 | ⏳ | **Website blocking** | An extension for Chrome and Edge that shows a block page instead of distracting sites. |
 | ⏳ | **Strict mode, hardened** | A strict session that holds up against closing the app, ending it from Task Manager, changing the clock or uninstalling. |
