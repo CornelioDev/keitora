@@ -40,12 +40,28 @@ url = { version = "2.5.8", default-features = false, features = ["std"] }
 
 # Our own crates, used by path. They are never published, so they have no
 # version, and Cargo.lock lists them without a `source`.
+keitora-core = { path = "crates/keitora-core" }
 keitora-sys = { path = "crates/keitora-sys" }
+
+# Error types in libraries (AGENTS.md, "Conventions").
+thiserror = "2.0.21"
 
 # Win32 bindings, used only by keitora-sys (ADR-0012). The 0.61 line is the
 # one windows-service uses, so there is a single copy. Each crate turns on
 # only the API families it calls.
 windows-sys = { version = "0.61.2", default-features = false }
+# Talks to the Service Control Manager for keitora-service: the dispatcher,
+# the control handler and status reports. It has no features.
+windows-service = "0.8.1"
+
+# Logging. `std` only: no `attributes` (the `#[instrument]` macro and its
+# proc-macro dependencies).
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# The formatter that writes log lines. `fmt` and `std` only: no colors
+# (`ansi`), no bridge from the `log` crate (`tracing-log`), no `smallvec`.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+# Daily log files. Its only feature, `parking_lot`, is off.
+tracing-appender = "0.2.5"
 
 [profile.release]
 # Integer overflow panics, as in debug builds, instead of silently wrapping:
