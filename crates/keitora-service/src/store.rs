@@ -22,23 +22,34 @@
 //!   checked deserializers as everywhere else; a value that fails is
 //!   [`StoreError::Corrupt`], never replaced by a default.
 //! - The engine snapshot's length is checked, in SQL, before it is read or
-//!   parsed ([`MAX_SNAPSHOT_BYTES`]).
+//!   parsed ([`MAX_SNAPSHOT_BYTES`]); no other value longer than 8 MiB is
+//!   read at all.
+//! - The schema must be exactly the one its version should have
+//!   ([`StoreError::UnexpectedSchema`]), and SQL stored in the file never
+//!   runs: triggers and views are off, and so is WAL, which SQLite would
+//!   otherwise take from a `keitora.db-wal` file planted next to the
+//!   database.
 //! - A file that isn't a database, is damaged, or comes from a newer schema
 //!   is refused with an error and **never deleted, reset or downgraded**:
 //!   that would also erase a strict session.
 //!
 //! # A full disk can't erase a strict session (#48, ADR-0013)
 //!
-//! - Opening an up-to-date database writes nothing, so a store whose file
-//!   can't be written still opens and reads, and the service can restore a
-//!   session; every write then fails with [`StoreError::Database`].
+//! - Opening an up-to-date database never writes the database file, so a
+//!   store whose file can't be written still opens and reads, and the
+//!   service can restore a session; every write then fails with
+//!   [`StoreError::Database`]. Opening does write the rollback journal, see
+//!   below.
 //! - [`Store::save_snapshot`] returns `Ok` only once the snapshot is on
 //!   disk (`PRAGMA synchronous = FULL`), and is atomic: on error, the
 //!   snapshot stored before is still the one stored.
 //! - Once a snapshot has been saved, saving another needs no new disk
 //!   space: the snapshot is padded to a fixed length and overwrites the same
 //!   page, and the rollback journal is kept between writes
-//!   (`journal_mode = PERSIST`) at the size those writes need.
+//!   (`journal_mode = PERSIST`) at the size those writes need. A crash
+//!   during a write leaves a journal that the next open plays back and, as
+//!   SQLite does that before it can keep the journal, deletes; opening then
+//!   grows it back to that size, which may fail on a full disk.
 //!
 //! # No user data in logs
 //!
@@ -53,12 +64,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use keitora_core::engine::{EngineState, LockKind, PomodoroPreset};
-use keitora_core::model::Blocklist;
-use rusqlite::config::DbConfig;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
+use keitora_core::model::{Blocklist, MAX_ID_LEN};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+mod connection;
 mod error;
 mod schema;
 mod wall_time;
@@ -201,41 +212,34 @@ impl Store {
     /// parents) and the file if they don't exist, and applies the
     /// migrations the file lacks.
     ///
-    /// An up-to-date database is only read, so this works even when the
-    /// file can't be written, as on a full disk.
+    /// An up-to-date database file is only read, so this works even when
+    /// the file can't be written, as on a full disk. The rollback journal is
+    /// written, to keep room for the next checkpoint
+    /// (`connection::reserve_journal`); if that fails, opening still
+    /// succeeds.
     ///
     /// # Errors
     ///
     /// - [`StoreError::CreateFolder`] if the folder can't be created.
     /// - [`StoreError::SchemaTooNew`] if the file's schema is newer than this
-    ///   build's, and [`StoreError::Corrupt`] if its schema version is
-    ///   negative. The file is left as it was.
+    ///   build's, [`StoreError::Corrupt`] if its schema version is negative,
+    ///   and [`StoreError::UnexpectedSchema`] if its schema isn't the one
+    ///   its version should have. The file is left as it was.
     /// - [`StoreError::Database`] if the file isn't a database, is damaged,
     ///   or can't be migrated, for instance because it can't be written.
     ///   The file is never deleted or reset.
-    /// - [`StoreError::Migration`] if a migration fails for another reason,
-    ///   such as an old database that already has a table it creates.
+    /// - [`StoreError::Migration`] if a migration fails for another reason.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let data_dir = data_dir.as_ref();
         fs::create_dir_all(data_dir).map_err(|source| StoreError::CreateFolder { source })?;
-        let path = data_dir.join(DB_FILE_NAME);
-        // No `SQLITE_OPEN_URI`: the path is a file name, never a URI with
-        // options. If the file is read-only, SQLite opens it for reading.
-        let mut connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        // Absolute, so that SQLite never reads the name as a URI.
+        let path = std::path::absolute(data_dir.join(DB_FILE_NAME))
+            .map_err(|source| StoreError::CreateFolder { source })?;
+        let mut connection = connection::open(&path)?;
 
-        // The connection's settings come first. They do no I/O, so they
-        // write nothing even to a file refused below, and with them the
-        // first read, which rolls back a transaction a crash interrupted,
-        // keeps the journal file instead of deleting it.
-        configure(&connection)?;
-
-        // The version comes before anything could write: a newer or
-        // nonsensical one is refused with the file untouched.
+        // The first read. It plays back the journal of a transaction a
+        // crash interrupted, if any; nothing else before the checks below
+        // can write.
         let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if found > schema::SCHEMA_VERSION {
             return Err(StoreError::SchemaTooNew {
@@ -249,18 +253,9 @@ impl Store {
             });
         }
 
-        // Only now, after a read, is the journal mode the file imposes known.
-        let mode: String = connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
-        if !mode.eq_ignore_ascii_case("persist") {
-            // Only a database in WAL mode, which this store never sets, has
-            // another mode. Reading still works, and refusing to open would
-            // stop the service from restoring a session.
-            tracing::warn!(
-                journal_mode = mode.as_str(),
-                "the database isn't in PERSIST journal mode; checkpoints may need new disk space"
-            );
-        }
+        schema::verify(&connection, found)?;
 
+        connection::set_durability(&connection)?;
         if found < schema::SCHEMA_VERSION {
             schema::migrations().to_latest(&mut connection)?;
             tracing::info!(
@@ -269,6 +264,7 @@ impl Store {
                 "migrated the database schema"
             );
         }
+        connection::reserve_journal(&mut connection);
         Ok(Self { connection, path })
     }
 
@@ -287,12 +283,12 @@ impl Store {
     pub fn put_blocklist(&mut self, blocklist: &Blocklist) -> Result<(), StoreError> {
         blocklist.validate().map_err(StoreError::InvalidBlocklist)?;
         let json = encode(blocklist, "blocklist")?;
-        self.connection.execute(
+        let changed = self.connection.execute(
             "INSERT INTO blocklist (id, json) VALUES (?1, ?2) \
              ON CONFLICT (id) DO UPDATE SET json = excluded.json",
             params![blocklist.id, json],
         )?;
-        Ok(())
+        one_row_changed(changed, "blocklist")
     }
 
     /// Every stored blocklist, in the order they were first stored.
@@ -375,12 +371,12 @@ impl Store {
     /// [`StoreError::Database`] if the file can't be written.
     pub fn put_settings(&mut self, settings: &Settings) -> Result<(), StoreError> {
         let json = encode(settings, "settings")?;
-        self.connection.execute(
+        let changed = self.connection.execute(
             "INSERT INTO settings (id, json) VALUES (1, ?1) \
              ON CONFLICT (id) DO UPDATE SET json = excluded.json",
             [json],
         )?;
-        Ok(())
+        one_row_changed(changed, "settings")
     }
 
     // -----------------------------------------------------------------------
@@ -391,16 +387,29 @@ impl Store {
     ///
     /// # Errors
     ///
+    /// [`StoreError::InvalidRecord`] if its blocklist id isn't a valid id
+    /// (as [`Blocklist::validate`] checks one) or its lock fails
+    /// [`LockKind::validate`]; nothing is stored. Its preset is always
+    /// valid, as [`PomodoroPreset`] can only hold valid values.
     /// [`StoreError::OutOfRange`] if its start time or focus time doesn't
     /// fit in the database's integers, which no time Windows can hold and
     /// no session's focus reaches. [`StoreError::Database`] if the file
     /// can't be written.
     pub fn record_session(&mut self, record: &SessionRecord) -> Result<(), StoreError> {
+        if !is_valid_blocklist_id(&record.blocklist_id) {
+            return Err(StoreError::InvalidRecord {
+                what: "blocklist id",
+            });
+        }
+        record
+            .lock
+            .validate()
+            .map_err(|_| StoreError::InvalidRecord { what: "lock" })?;
         let started_at_ms = wall_time::to_millis(record.started_at)
             .ok_or(StoreError::OutOfRange { what: "wall time" })?;
         let focus_ns = i64::try_from(record.focus.as_nanos())
             .map_err(|_| StoreError::OutOfRange { what: "focus time" })?;
-        self.connection.execute(
+        let changed = self.connection.execute(
             "INSERT INTO session_history \
                (started_at_ms, blocklist_id, preset, lock, outcome, focus_ns) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -413,7 +422,7 @@ impl Store {
                 focus_ns,
             ],
         )?;
-        Ok(())
+        one_row_changed(changed, "session record")
     }
 
     /// The sessions that started in `[from, to)`, oldest first; sessions
@@ -457,11 +466,11 @@ impl Store {
     pub fn record_block_event(&mut self, event: &BlockEvent) -> Result<(), StoreError> {
         let at_ms =
             wall_time::to_millis(event.at).ok_or(StoreError::OutOfRange { what: "wall time" })?;
-        self.connection.execute(
+        let changed = self.connection.execute(
             "INSERT INTO block_event (at_ms, kind, target) VALUES (?1, ?2, ?3)",
             params![at_ms, event.kind.as_str(), event.target],
         )?;
-        Ok(())
+        one_row_changed(changed, "block event")
     }
 
     /// The block events that happened in `[from, to)`, oldest first; events
@@ -526,13 +535,15 @@ impl Store {
         let updated = self
             .connection
             .execute("UPDATE engine_snapshot SET json = ?1 WHERE id = 1", [&json])?;
-        if updated == 0 {
+        let changed = if updated == 0 {
             self.connection.execute(
                 "INSERT INTO engine_snapshot (id, json) VALUES (1, ?1)",
                 [&json],
-            )?;
-        }
-        Ok(())
+            )?
+        } else {
+            updated
+        };
+        one_row_changed(changed, "engine snapshot")
     }
 
     /// The stored engine snapshot, or `None` if none was ever saved.
@@ -574,34 +585,28 @@ impl Store {
     }
 }
 
-/// Sets up a new connection. Each setting is the connection's own, so this
-/// writes nothing to the file.
+/// Checks that a write changed exactly one row. With the store's own
+/// schema it always does; anything else means the write may not have been
+/// stored.
 ///
 /// # Errors
 ///
-/// [`StoreError::Database`] if SQLite refuses a setting.
-fn configure(connection: &Connection) -> Result<(), StoreError> {
-    // Keep the rollback journal between transactions, with its header
-    // zeroed, instead of deleting it: a later transaction of the same size
-    // reuses its space, so a checkpoint needs no new disk space (#48,
-    // ADR-0013). DELETE and TRUNCATE recreate or regrow the journal, and
-    // WAL appends to a log, on every write.
-    // A database file in WAL mode keeps WAL, without any write; `open`
-    // checks the mode in effect once it has read the file.
-    let _requested: String =
-        connection.pragma_update_and_check(None, "journal_mode", "PERSIST", |row| row.get(0))?;
-    // Flush the journal and the database at every commit, so that `Ok`
-    // means on disk, also after a power cut.
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    // Statement journals and other temporary data stay in memory, not in
-    // files that would need disk space.
-    connection.pragma_update(None, "temp_store", "MEMORY")?;
-    // Until T-5.3 any user can replace the file, so don't trust SQL inside
-    // it: functions with side effects can't run from its triggers or views,
-    // and the schema can't be edited through SQL.
-    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
-    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-    Ok(())
+/// [`StoreError::WriteNotApplied`] naming `what` otherwise.
+fn one_row_changed(changed: usize, what: &'static str) -> Result<(), StoreError> {
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::WriteNotApplied { what })
+    }
+}
+
+/// Whether `id` is a valid blocklist id, by the rule of
+/// [`Blocklist::validate`]: 1 to [`MAX_ID_LEN`] bytes, ASCII letters,
+/// digits and `-` only.
+fn is_valid_blocklist_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// The bounds of `[from, to)` in stored milliseconds.
@@ -662,6 +667,10 @@ fn decode_session(row: &Row<'_>) -> Result<SessionRecord, StoreError> {
     const WHAT: &str = "session record";
     let corrupt = || StoreError::Corrupt { what: WHAT };
     let started_at = wall_time::from_millis(row.get(0)?).ok_or_else(corrupt)?;
+    let blocklist_id: String = row.get(1)?;
+    if !is_valid_blocklist_id(&blocklist_id) {
+        return Err(corrupt());
+    }
     let preset: PomodoroPreset = decode(&row.get::<_, String>(2)?, WHAT)?;
     let lock: LockKind = decode(&row.get::<_, String>(3)?, WHAT)?;
     lock.validate().map_err(|_| corrupt())?;
@@ -669,7 +678,7 @@ fn decode_session(row: &Row<'_>) -> Result<SessionRecord, StoreError> {
     let focus_ns = u64::try_from(row.get::<_, i64>(5)?).map_err(|_| corrupt())?;
     Ok(SessionRecord {
         started_at,
-        blocklist_id: row.get(1)?,
+        blocklist_id,
         preset,
         lock,
         outcome,
@@ -696,20 +705,82 @@ fn decode_block_event(row: &Row<'_>) -> Result<BlockEvent, StoreError> {
 #[cfg(test)]
 mod tests {
     use keitora_core::engine::Engine;
-    use keitora_core::model::{SitePattern, Target};
+    use keitora_core::model::{
+        AppIdentifiers, MAX_APP_ID_LEN, MAX_EXCEPTIONS, MAX_NAME_LEN, MAX_PATTERN_LEN, MAX_TARGETS,
+        SitePattern, Target,
+    };
+    use rusqlite::config::DbConfig;
+    use rusqlite::limits::Limit;
     use rusqlite::types::Value;
 
     use super::*;
     use crate::clock::SystemClock;
 
-    /// A store in a fresh folder named after the test, under the system's
-    /// temporary folder.
-    fn store(test_name: &str) -> Store {
-        let dir = std::env::temp_dir()
-            .join("keitora-store-unit-tests")
-            .join(format!("{test_name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        Store::open(&dir).expect("opens")
+    /// A fresh folder named after a test, under the system's temporary
+    /// folder, deleted when dropped.
+    struct Sandbox(PathBuf);
+
+    impl Sandbox {
+        fn new(test_name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join("keitora-store-unit-tests")
+                .join(format!("{test_name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("creates the sandbox");
+            Self(dir)
+        }
+
+        /// A folder `name` inside the sandbox, as a data folder.
+        fn dir(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+
+        fn db(&self, name: &str) -> PathBuf {
+            self.dir(name).join(DB_FILE_NAME)
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            // Never panic in `drop`; a leftover folder is cleared next run.
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A store in the data folder `data` of a fresh sandbox. Bind both, the
+    /// sandbox first, so that the store closes before the folder goes.
+    fn store(test_name: &str) -> (Sandbox, Store) {
+        let sandbox = Sandbox::new(test_name);
+        let store = Store::open(sandbox.dir("data")).expect("opens");
+        (sandbox, store)
+    }
+
+    /// A connection to `path` that bypasses the store, as a tamperer has.
+    fn raw(path: &Path) -> Connection {
+        Connection::open(path).expect("opens the file directly")
+    }
+
+    /// The snapshot of a strict session that has run for `active`.
+    fn strict(active_secs: u64) -> EngineState {
+        let state = format!(
+            r#"{{"session":{{"preset":{{"focus_min":25,"short_break_min":5,"long_break_min":15,"cycles":4}},"lock":{{"kind":"until_timer_ends"}},"first_cycle":1,"active":{{"secs":{active_secs},"nanos":999999999}},"paused":false}}}}"#
+        );
+        serde_json::from_str(&state).expect("a valid snapshot")
+    }
+
+    /// Every file in `dir`, by name, with its size.
+    fn files_in(dir: &Path) -> Vec<(String, u64)> {
+        let mut files: Vec<(String, u64)> = fs::read_dir(dir)
+            .expect("lists")
+            .map(|entry| entry.expect("reads an entry"))
+            .filter(|entry| entry.metadata().expect("metadata").is_file())
+            .map(|entry| {
+                let len = entry.metadata().expect("metadata").len();
+                (entry.file_name().into_string().expect("UTF-8"), len)
+            })
+            .collect();
+        files.sort();
+        files
     }
 
     fn blocklist(id: &str) -> Blocklist {
@@ -747,7 +818,7 @@ mod tests {
 
     #[test]
     fn the_connection_keeps_its_journal_and_flushes_every_commit() {
-        let store = store("pragmas");
+        let (_sandbox, store) = store("pragmas");
         let pragma = |name: &str| -> String {
             match store
                 .connection
@@ -765,12 +836,366 @@ mod tests {
         // 2 is MEMORY.
         assert_eq!(pragma("temp_store"), "2");
         assert_eq!(pragma("trusted_schema"), "0");
+        assert_eq!(pragma("cell_size_check"), "1");
         assert_eq!(pragma("user_version"), schema::SCHEMA_VERSION.to_string());
     }
 
     #[test]
+    fn the_connection_trusts_nothing_in_the_file() {
+        let (_sandbox, store) = store("hardening");
+        let config = |option| store.connection.db_config(option).expect("reads");
+        assert!(!config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA));
+        assert!(config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE));
+        assert!(!config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER));
+        assert!(!config(DbConfig::SQLITE_DBCONFIG_ENABLE_VIEW));
+        assert_eq!(
+            store
+                .connection
+                .limit(Limit::SQLITE_LIMIT_LENGTH)
+                .expect("reads"),
+            connection::MAX_VALUE_BYTES
+        );
+    }
+
+    // -- WAL is compiled out (security review M1) ---------------------------
+
+    #[test]
+    fn write_ahead_logging_is_compiled_out() {
+        let (_sandbox, store) = store("no_wal");
+        let options: Vec<String> = store
+            .connection
+            .prepare("PRAGMA compile_options")
+            .expect("prepares")
+            .query_map([], |row| row.get(0))
+            .expect("lists")
+            .collect::<Result<_, _>>()
+            .expect("reads");
+        assert!(
+            options.iter().any(|option| option == "OMIT_WAL"),
+            "LIBSQLITE3_FLAGS from .cargo/config.toml wasn't applied: {options:?}"
+        );
+        let mode: String = store
+            .connection
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+            .expect("asks");
+        assert_eq!(mode, "persist");
+    }
+
+    #[test]
+    fn a_planted_wal_file_is_never_opened() {
+        let sandbox = Sandbox::new("planted_wal");
+        let dir = sandbox.dir("data");
+        let mut store = Store::open(&dir).expect("opens");
+        store.save_snapshot(&strict(60)).expect("saves");
+        drop(store);
+
+        // With WAL compiled in, SQLite would open any `-wal` file before a
+        // read, create the `-shm` index next to it, and read pages from it.
+        let wal = dir.join("keitora.db-wal");
+        let planted = vec![0x37_u8; 64 * 1024];
+        fs::write(&wal, &planted).expect("plants a WAL file");
+
+        let store = Store::open(&dir).expect("opens");
+        assert_eq!(store.load_snapshot().expect("loads"), Some(strict(60)));
+        drop(store);
+        assert_eq!(fs::read(&wal).expect("reads"), planted);
+        assert!(!dir.join("keitora.db-shm").exists());
+    }
+
+    #[test]
+    fn a_database_in_wal_mode_is_refused() {
+        let sandbox = Sandbox::new("wal_header");
+        let dir = sandbox.dir("data");
+        drop(Store::open(&dir).expect("opens"));
+        // Bytes 18 and 19 of the header are the file format's read and write
+        // versions; 2 means WAL.
+        let mut file = fs::read(sandbox.db("data")).expect("reads");
+        for byte in file.get_mut(18..20).expect("a header") {
+            *byte = 2;
+        }
+        fs::write(sandbox.db("data"), &file).expect("writes");
+
+        let result = Store::open(&dir);
+        assert!(
+            matches!(result, Err(StoreError::Database { .. })),
+            "{result:?}"
+        );
+        drop(result);
+        assert_eq!(fs::read(sandbox.db("data")).expect("reads"), file);
+    }
+
+    // -- Planted schema objects (security review M3) ------------------------
+
+    /// Opens a fresh store in `data`, closes it, runs `sql` on the file
+    /// directly, and checks that opening it again is refused with the file
+    /// left byte for byte as it was.
+    fn assert_schema_change_is_refused(test_name: &str, sql: &str) {
+        let sandbox = Sandbox::new(test_name);
+        let mut store = Store::open(sandbox.dir("data")).expect("opens");
+        store.save_snapshot(&strict(60)).expect("saves");
+        drop(store);
+        raw(&sandbox.db("data"))
+            .execute_batch(sql)
+            .expect("test setup");
+        let before = fs::read(sandbox.db("data")).expect("reads");
+
+        let result = Store::open(sandbox.dir("data"));
+        assert!(
+            matches!(result, Err(StoreError::UnexpectedSchema)),
+            "{sql}: {result:?}"
+        );
+        drop(result);
+        assert_eq!(
+            fs::read(sandbox.db("data")).expect("reads"),
+            before,
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn a_view_planted_in_place_of_a_table_is_refused() {
+        // The reproduction of the review: writes to the view vanish.
+        assert_schema_change_is_refused(
+            "planted_view",
+            "DROP TABLE engine_snapshot;
+             CREATE TABLE elsewhere (id INTEGER, json TEXT);
+             CREATE VIEW engine_snapshot AS SELECT id, json FROM elsewhere;
+             CREATE TRIGGER swallow INSTEAD OF UPDATE ON engine_snapshot BEGIN SELECT 1; END;",
+        );
+    }
+
+    #[test]
+    fn a_planted_trigger_or_virtual_table_is_refused() {
+        assert_schema_change_is_refused(
+            "planted_trigger",
+            "CREATE TRIGGER rewrite AFTER UPDATE ON engine_snapshot \
+             BEGIN UPDATE engine_snapshot SET json = '{}'; END;",
+        );
+        assert_schema_change_is_refused(
+            "planted_fts",
+            "CREATE VIRTUAL TABLE search USING fts5(text);",
+        );
+    }
+
+    #[test]
+    fn a_version_0_file_with_objects_is_refused_not_migrated() {
+        let sandbox = Sandbox::new("version_0_objects");
+        fs::create_dir_all(sandbox.dir("data")).expect("creates");
+        raw(&sandbox.db("data"))
+            .execute_batch("CREATE TABLE planted (x);")
+            .expect("test setup");
+        let before = fs::read(sandbox.db("data")).expect("reads");
+
+        let result = Store::open(sandbox.dir("data"));
+        assert!(matches!(result, Err(StoreError::UnexpectedSchema)));
+        drop(result);
+        assert_eq!(fs::read(sandbox.db("data")).expect("reads"), before);
+    }
+
+    #[test]
+    fn a_write_that_changes_no_row_or_several_is_an_error() {
+        assert!(one_row_changed(1, "x").is_ok());
+        for changed in [0, 2] {
+            assert!(matches!(
+                one_row_changed(changed, "engine snapshot"),
+                Err(StoreError::WriteNotApplied {
+                    what: "engine snapshot"
+                })
+            ));
+        }
+    }
+
+    // -- The journal across a crash (QA F1) ---------------------------------
+
+    #[test]
+    fn reopening_writes_the_journal_but_never_the_database_file() {
+        let sandbox = Sandbox::new("reopen_no_db_write");
+        let mut store = Store::open(sandbox.dir("data")).expect("opens");
+        store.save_snapshot(&strict(60)).expect("saves");
+        drop(store);
+        let before = fs::read(sandbox.db("data")).expect("reads");
+
+        let store = Store::open(sandbox.dir("data")).expect("opens");
+        assert_eq!(store.load_snapshot().expect("loads"), Some(strict(60)));
+        drop(store);
+        assert_eq!(fs::read(sandbox.db("data")).expect("reads"), before);
+    }
+
+    #[test]
+    fn checkpoints_after_recovering_from_a_crash_need_no_new_disk_space() {
+        let sandbox = Sandbox::new("crash_recovery");
+        let mut store = Store::open(sandbox.dir("live")).expect("opens");
+        store.save_snapshot(&strict(60)).expect("saves");
+        drop(store);
+
+        // A checkpoint is under way, its journal written, when the power
+        // goes: copy the database and its hot journal as they are then.
+        let live = raw(&sandbox.db("live"));
+        // With `synchronous = OFF` SQLite writes the journal's header in
+        // full at once; otherwise only when it syncs the journal, just
+        // before it writes the database, which the copy would have to hit.
+        live.execute_batch(
+            "PRAGMA journal_mode = PERSIST;
+             PRAGMA synchronous = OFF;
+             BEGIN IMMEDIATE;
+             UPDATE engine_snapshot SET json = upper(json) WHERE id = 1;",
+        )
+        .expect("starts a checkpoint");
+        let crashed = sandbox.dir("crashed");
+        fs::create_dir_all(&crashed).expect("creates");
+        for name in [DB_FILE_NAME, "keitora.db-journal"] {
+            fs::copy(sandbox.dir("live").join(name), crashed.join(name)).expect("copies");
+        }
+        drop(live);
+        let journal = fs::read(crashed.join("keitora.db-journal")).expect("reads");
+        assert_ne!(journal.first(), Some(&0), "test setup: the journal is hot");
+
+        // The service starts again: opening plays the journal back, which
+        // deletes it, and then grows it back.
+        let mut store = Store::open(&crashed).expect("recovers");
+        assert_eq!(store.load_snapshot().expect("loads"), Some(strict(60)));
+
+        // From now on SQLite can't create a side file, as on a full disk.
+        for name in ["keitora.db-journal", "keitora.db-wal", "keitora.db-shm"] {
+            let path = crashed.join(name);
+            if !path.exists() {
+                fs::create_dir(&path).expect("blocks a side file");
+            }
+        }
+        let before = files_in(&crashed);
+        for minute in 2..=20 {
+            store
+                .save_snapshot(&strict(minute * 61))
+                .expect("a checkpoint needs no new disk space");
+            assert_eq!(files_in(&crashed), before, "checkpoint {minute}");
+        }
+        drop(store);
+        for name in ["keitora.db-wal", "keitora.db-shm"] {
+            let _ = fs::remove_dir(crashed.join(name));
+        }
+        let store = Store::open(&crashed).expect("opens");
+        assert_eq!(store.load_snapshot().expect("loads"), Some(strict(20 * 61)));
+    }
+
+    // -- Value sizes (security review L1) -----------------------------------
+
+    /// A valid blocklist at every maximum of `keitora_core::model`, with
+    /// as many characters as validation allows that JSON escapes.
+    fn worst_case_blocklist() -> Blocklist {
+        let text = |prefix: &str, fill: &str, len: usize| -> String {
+            let mut text = prefix.to_owned();
+            while text.len() < len {
+                text.push_str(fill);
+            }
+            text
+        };
+        let targets = (0..MAX_TARGETS)
+            .map(|i| Target::App {
+                name: text(&format!("{i}"), "\"", MAX_NAME_LEN),
+                ids: AppIdentifiers {
+                    windows_exe: Some(text(&format!("{i}"), "e", MAX_APP_ID_LEN)),
+                    windows_path: Some(text(&format!("C:\\{i}"), "\\", MAX_APP_ID_LEN)),
+                    android_package: Some(text("a", "\"", MAX_APP_ID_LEN)),
+                    ios_token: Some(text("t", "\\", MAX_APP_ID_LEN)),
+                },
+            })
+            .collect();
+        let exceptions = (0..MAX_EXCEPTIONS)
+            .map(|i| SitePattern::new(text(&format!("e{i}.example.org/"), "q", MAX_PATTERN_LEN)))
+            .collect();
+        let blocklist = Blocklist {
+            id: text("big-", "a", MAX_ID_LEN),
+            name: text("n", "\"", MAX_NAME_LEN),
+            color: "#abcdef".to_owned(),
+            targets,
+            exceptions,
+            block_during_breaks: true,
+        };
+        blocklist.validate().expect("test setup: valid");
+        blocklist
+    }
+
+    #[test]
+    fn the_largest_valid_blocklist_fits_under_the_value_limit() {
+        let blocklist = worst_case_blocklist();
+        let json = serde_json::to_string(&blocklist).expect("encodes");
+        assert!(json.len() <= connection::MAX_BLOCKLIST_JSON_BYTES);
+
+        let (_sandbox, mut store) = store("largest_value");
+        store.put_blocklist(&blocklist).expect("stores");
+        assert_eq!(
+            store.blocklist(&blocklist.id).expect("reads"),
+            Some(blocklist)
+        );
+    }
+
+    #[test]
+    fn a_stored_value_over_the_limit_is_an_error_not_read() {
+        let sandbox = Sandbox::new("value_over_limit");
+        let mut store = Store::open(sandbox.dir("data")).expect("opens");
+        store.put_blocklist(&blocklist("work")).expect("stores");
+        drop(store);
+        // 9 000 000 bytes of text, through a connection without the limit.
+        raw(&sandbox.db("data"))
+            .execute_batch("UPDATE blocklist SET json = hex(zeroblob(4500000));")
+            .expect("tampers");
+
+        let store = Store::open(sandbox.dir("data")).expect("opens");
+        assert!(matches!(
+            store.blocklist("work"),
+            Err(StoreError::Database { .. })
+        ));
+    }
+
+    // -- Session records (QA F3) --------------------------------------------
+
+    #[test]
+    fn a_session_record_with_an_invalid_field_is_refused_and_not_stored() {
+        let (_sandbox, mut store) = store("invalid_record");
+        let mut bad_id = record(LockKind::None, Duration::ZERO);
+        bad_id.blocklist_id = "not an id!".to_owned();
+        let mut empty_id = record(LockKind::None, Duration::ZERO);
+        empty_id.blocklist_id = String::new();
+        let mut long_id = record(LockKind::None, Duration::ZERO);
+        long_id.blocklist_id = "a".repeat(MAX_ID_LEN + 1);
+        for invalid in [bad_id, empty_id, long_id] {
+            assert!(matches!(
+                store.record_session(&invalid),
+                Err(StoreError::InvalidRecord {
+                    what: "blocklist id"
+                })
+            ));
+        }
+        assert!(matches!(
+            store.record_session(&record(LockKind::RandomText { len: 0 }, Duration::ZERO)),
+            Err(StoreError::InvalidRecord { what: "lock" })
+        ));
+        let (from, to) = first_second();
+        assert_eq!(store.history(from, to).expect("reads"), Vec::new());
+    }
+
+    #[test]
+    fn a_stored_session_with_an_invalid_blocklist_id_is_corrupt() {
+        let (_sandbox, mut store) = store("history_blocklist_id");
+        store
+            .record_session(&record(LockKind::None, Duration::ZERO))
+            .expect("records");
+        store
+            .connection
+            .execute("UPDATE session_history SET blocklist_id = 'x y'", [])
+            .expect("tampers");
+        let (from, to) = first_second();
+        assert!(matches!(
+            store.history(from, to),
+            Err(StoreError::Corrupt {
+                what: "session record"
+            })
+        ));
+    }
+
+    #[test]
     fn every_saved_snapshot_takes_exactly_the_fixed_length() {
-        let mut store = store("padding");
+        let (_sandbox, mut store) = store("padding");
         let clock = SystemClock::new();
         let mut engine = Engine::new();
         let idle = engine.snapshot(&clock);
@@ -801,7 +1226,7 @@ mod tests {
 
     #[test]
     fn a_blocklist_stored_under_another_id_is_corrupt() {
-        let mut store = store("id_mismatch");
+        let (_sandbox, mut store) = store("id_mismatch");
         store.put_blocklist(&blocklist("work")).expect("stores");
         store
             .connection
@@ -820,7 +1245,7 @@ mod tests {
 
     #[test]
     fn a_stored_blocklist_that_isnt_json_is_corrupt() {
-        let mut store = store("blocklist_not_json");
+        let (_sandbox, mut store) = store("blocklist_not_json");
         store.put_blocklist(&blocklist("work")).expect("stores");
         store
             .connection
@@ -834,7 +1259,7 @@ mod tests {
 
     #[test]
     fn a_session_keeps_its_focus_time_to_the_nanosecond() {
-        let mut store = store("focus_nanos");
+        let (_sandbox, mut store) = store("focus_nanos");
         let exact = record(LockKind::None, Duration::new(1_500, 123_456_789));
         store.record_session(&exact).expect("records");
         let (from, to) = first_second();
@@ -843,7 +1268,7 @@ mod tests {
 
     #[test]
     fn a_focus_time_beyond_the_database_is_refused_and_not_stored() {
-        let mut store = store("focus_out_of_range");
+        let (_sandbox, mut store) = store("focus_out_of_range");
         let result = store.record_session(&record(LockKind::None, Duration::MAX));
         assert!(matches!(
             result,
@@ -855,7 +1280,7 @@ mod tests {
 
     #[test]
     fn a_stored_session_with_an_invalid_lock_is_corrupt() {
-        let mut store = store("history_lock");
+        let (_sandbox, mut store) = store("history_lock");
         store
             .record_session(&record(LockKind::RandomText { len: 8 }, Duration::ZERO))
             .expect("records");
@@ -877,7 +1302,7 @@ mod tests {
 
     #[test]
     fn the_tables_refuse_unknown_outcomes_and_kinds() {
-        let store = store("checks");
+        let (_sandbox, store) = store("checks");
         let outcome = store.connection.execute(
             "INSERT INTO session_history \
                (started_at_ms, blocklist_id, preset, lock, outcome, focus_ns) \

@@ -16,23 +16,45 @@ use keitora_core::model::ValidationError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
-    /// The data folder, or a folder above it, couldn't be created.
+    /// The data folder, or a folder above it, couldn't be created, or its
+    /// absolute path couldn't be found.
     #[error("couldn't create the data folder")]
     CreateFolder {
         /// The file system's error.
         #[source]
         source: io::Error,
     },
-    /// SQLite failed: the file isn't a database, is damaged, can't be
-    /// written (a full disk, a read-only file), or a column holds a value
-    /// of the wrong type.
+    /// SQLite failed: the file isn't a database (a database in WAL mode is
+    /// refused as one), is damaged, can't be written (a full disk, a
+    /// read-only file), holds a value of the wrong type, or a value longer
+    /// than the store reads.
     #[error("database error")]
     Database {
-        /// SQLite's error, through `rusqlite`. It names columns and SQLite
-        /// result codes, never stored values: every value is a bound
-        /// parameter, never part of the SQL text.
+        /// SQLite's error, through `rusqlite`. It never holds a stored value:
+        /// every value is a bound parameter, never part of the SQL text. Its
+        /// message may name an object of a planted schema (a table or
+        /// trigger name) when the schema itself can't be read.
         #[source]
         source: rusqlite::Error,
+    },
+    /// The database's schema isn't exactly the one its version should have:
+    /// an object was added, removed or changed, as by planting a view or a
+    /// trigger. The file is left as it was.
+    #[error("the database's schema isn't the one its version should have")]
+    UnexpectedSchema,
+    /// A write didn't change exactly the one row it should have, so it may
+    /// not have been stored. Never happens with the store's own schema.
+    #[error("the {what} wasn't stored")]
+    WriteNotApplied {
+        /// What was being written.
+        what: &'static str,
+    },
+    /// [`Store::record_session`](super::Store::record_session) refused a
+    /// record with an invalid field; nothing was stored.
+    #[error("invalid {what} in the session record")]
+    InvalidRecord {
+        /// The field: `"blocklist id"` or `"lock"`.
+        what: &'static str,
     },
     /// A migration failed for a reason other than an SQLite error.
     #[error("couldn't migrate the database")]

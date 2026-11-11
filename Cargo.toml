@@ -67,9 +67,11 @@ tracing-appender = "0.2.5"
 # SQLite C library into the binary, so the service never loads a
 # `sqlite3.dll` found on the machine. The default `cache` feature (a
 # prepared-statement cache, which pulls in `hashlink` and another `hashbrown`)
-# is off. 0.41 is the line `rusqlite_migration` supports; two lines can't
-# coexist, as both link the C library (`links = "sqlite3"`).
-rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
+# is off. `limits` lets the store cap the size of any value SQLite reads
+# (`SQLITE_LIMIT_LENGTH`). 0.41 is the line `rusqlite_migration` supports;
+# two lines can't coexist, as both link the C library (`links = "sqlite3"`).
+# The bundled SQLite is compiled without WAL (`.cargo/config.toml`).
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "limits"] }
 # Schema migrations for the store, recorded in SQLite's `user_version`.
 rusqlite_migration = "2.7.0"
 # JSON for what the store keeps as text: blocklists, settings and the engine
