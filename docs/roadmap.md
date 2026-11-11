@@ -157,7 +157,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
 - [ ] **T-5.1** Browser policies in HKLM applied by the service: `ExtensionInstallForcelist`, `IncognitoModeAvailability` (Chrome), `InPrivateModeAvailability` (Edge).
 - [ ] **T-5.2** Service recovery actions (restart on failure) and automatic start.
 - [ ] **T-5.3** ACL on `%ProgramData%\Keitora`: write for `SYSTEM` only.
-  - Before opening the store, check that `keitora.db`, `keitora.db-journal`, `keitora.db-wal` and `keitora.db-shm` are absent or are regular files owned by `SYSTEM` or Administrators, with no write access for users, not reparse points, and with a link count of 1; refuse a foreign journal, which `journal_mode = PERSIST` would otherwise keep as the store's journal (T-2.2 security review, M2; ADR-0013).
+  - Before opening the store, check that `keitora.db`, `keitora.db-journal`, `keitora.db-wal` and `keitora.db-shm` are absent or are regular files owned by `SYSTEM` or Administrators, with no write access for users, not reparse points, and with a link count of 1; refuse a foreign journal, which `journal_mode = PERSIST` would otherwise keep as the store's journal, and whose planted hot journal `SYSTEM` would play back at the next read, at any time while the service runs (T-2.2 security review, M2 and N3; ADR-0013).
 - [ ] **T-5.4** Clock-change resistance: remaining time uses the monotonic clock; integration test.
 - [ ] **T-5.5** Uninstall guard: the MSI queries the service and aborts while a strict session is active.
 - [ ] **T-5.6** Optional (off by default): block Task Manager and service management tools during strict sessions.
