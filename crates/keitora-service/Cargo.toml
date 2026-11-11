@@ -8,5 +8,19 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# The service's code lives in a library, `keitora_service`, so that it can be
+# tested without starting the binary; `src/main.rs` only picks the mode.
+[lib]
+name = "keitora_service"
+
+[dependencies]
+keitora-core.workspace = true
+keitora-sys.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+windows-service.workspace = true
+
 [lints]
 workspace = true

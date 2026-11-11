@@ -16,7 +16,7 @@ Focus on, in order:
 
 1. **Privilege boundary.** Any path from data controlled by a non-admin process (pipe messages, native messaging input, files in user-writable locations, registry keys users can write, environment variables) to a privileged action: process creation, file or registry writes, DLL loading, process termination of arbitrary targets.
 2. **Input handling** in `keitora-ipc`, `keitora-service` and `keitora-nmh`: size limits applied before parsing, validation of every field, no panics on malformed input (a panic in the service is a denial of service), integer overflow, path handling.
-3. **`unsafe` code:** only in `keitora-service/src/sys/`, each block with a correct `// SAFETY:` justification, handles closed, buffer sizes checked.
+3. **`unsafe` code:** only in `crates/keitora-sys`, each block with a correct `// SAFETY:` justification, handles closed, buffer sizes checked.
 4. **Windows specifics:** pipe DACL and `PIPE_REJECT_REMOTE_CLIENTS`, ACLs on `%ProgramData%\Keitora`, unquoted service paths, DLL search order, installer custom actions running as SYSTEM.
 5. **Strict-mode integrity:** any client request that can stop, shorten or weaken an active strict session, or edit its blocklist.
 6. **Supply chain:** new dependencies (maintenance, license, popularity, `build.rs` behavior), output of `cargo deny check`.

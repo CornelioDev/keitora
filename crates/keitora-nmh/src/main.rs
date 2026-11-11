@@ -5,8 +5,8 @@
 //! stdin and stdout) and the Keitora service (over a named pipe).
 //!
 //! It handles input coming from the browser, so it never contains `unsafe`
-//! code. Allowing it, for example for FFI, is an architectural change that
-//! needs an ADR.
+//! code. A Win32 call it needs goes through a safe wrapper in `keitora-sys`,
+//! the only crate allowed `unsafe` (ADR-0012).
 
 #![forbid(unsafe_code)]
 

@@ -26,3 +26,10 @@ The pomodoro engine (T-1.3) must report the phase, cycle and remaining time of a
 - A snapshot (T-1.7) stores the active time, the segment's first cycle, the preset and the lock, never a `MonotonicInstant`, whose origin changes at every service start.
 - The service must give the engine one monotonic clock that never goes backwards or wraps (T-2.1, T-2.5): if it went backwards, a session would stand still until it caught up.
 - Time while the machine is off is not counted by this model; whether and how to credit it is decided in [#19](https://github.com/CornelioDev/keitora/issues/19).
+
+## Addendum (T-2.1): the service's monotonic source, and sleep
+
+- The service's clock, `keitora_service::clock::SystemClock`, takes its monotonic reading from Windows' unbiased interrupt time (`QueryUnbiasedInterruptTime`, through `keitora-sys`, [ADR-0012](0012-isolate-unsafe-code-in-keitora-sys.md)): 64 bits in 100 ns units, so it doesn't wrap, and it ignores changes to the system time. The clock also never returns less than a reading it has already returned. `GetTickCount`, 32 bits, wraps after 49.7 days and is never used.
+- That source stops while the machine sleeps or hibernates, so **time asleep or hibernated doesn't count toward a session's active time**, strict or not: a phase with 10 minutes left when the lid closes has 10 minutes left when the machine wakes up. This matches time while the machine is off, which isn't credited either ([ADR-0011](0011-validated-engine-snapshot.md)), and [#19](https://github.com/CornelioDev/keitora/issues/19) decides whether to credit either.
+- `std::time::Instant` (QPC on Windows) was not chosen because the standard library leaves unspecified whether it counts time asleep, so the behavior couldn't be documented.
+- The service creates one clock and shares it; no client chooses or moves it, and `keitora_core::clock::FakeClock` is banned outside tests in every crate but the pure ones, by `disallowed-types` in their `clippy.toml`.

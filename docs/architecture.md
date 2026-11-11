@@ -30,12 +30,15 @@ This document explains how Keitora is put together and why. Decisions are record
 |---|---|---|---|
 | `keitora-core` | Rust lib | Domain model, pomodoro state machine, site/app rule matching, strict-mode policy | `serde`, `thiserror`, `chrono` |
 | `keitora-ipc` | Rust lib | Protocol types, versioning, line-delimited JSON framing | `keitora-core`, `serde` |
-| `keitora-service` | Rust bin | Windows service, persistence, process monitor, pipe server, browser policies | `keitora-core`, `keitora-ipc`, `windows`, `windows-service`, `rusqlite`, `tokio`, `tracing` |
-| `keitora-nmh` | Rust bin | Native messaging host: stdin/stdout ⇄ pipe | `keitora-ipc` |
-| `apps/desktop` | Tauri app | UI; `src-tauri` forwards commands to the pipe and events to the frontend | `keitora-ipc`, `tauri`, `tauri-specta` |
+| `keitora-sys` | Rust lib | Safe wrappers around Win32 calls, one per call; the only crate with `unsafe` code | `windows-sys` |
+| `keitora-service` | Rust bin + lib | Windows service, persistence, process monitor, pipe server, browser policies | `keitora-core`, `keitora-ipc`, `keitora-sys`, `windows-service`, `rusqlite`, `tokio`, `tracing` |
+| `keitora-nmh` | Rust bin | Native messaging host: stdin/stdout ⇄ pipe | `keitora-ipc`; `keitora-sys` when it needs a Win32 call |
+| `apps/desktop` | Tauri app | UI; `src-tauri` forwards commands to the pipe and events to the frontend | `keitora-ipc`, `tauri`, `tauri-specta`; `keitora-sys` when it needs a Win32 call |
 | `extension` | TS | Applies site rules with `declarativeNetRequest`, shows the block page | — |
 
 Dependencies only point downwards in this table. `keitora-core` never depends on anything platform-specific, which keeps it testable and reusable on Android and iOS later (via `uniffi`).
+
+Every crate but `keitora-sys` has `#![forbid(unsafe_code)]`: a Win32 call that the standard library or a vetted crate doesn't offer gets a safe wrapper in `keitora-sys` ([ADR-0012](adr/0012-isolate-unsafe-code-in-keitora-sys.md)).
 
 ## IPC protocol (`keitora-ipc`)
 
@@ -77,11 +80,17 @@ Sites are platform-independent. Apps are logical entities with one identifier pe
 4. Every transition is persisted; after a reboot the service restores the session with the correct remaining time.
 5. After the last cycle the service emits `SessionEnded` and writes the history entry.
 
+## Service binary
+
+- `keitora-service` with no arguments runs as a Windows service, started by the Service Control Manager. Development builds also have `keitora-service --console [--data-dir <DIR>]`, which runs it in a terminal until standard input closes or Ctrl+C; release builds reject it.
+- The first thing it does is restrict DLL loading to `System32` (`SetDefaultDllDirectories`); if that fails, it refuses to run.
+- Its one clock reads the unbiased interrupt time, so time asleep or hibernated doesn't count toward a session ([ADR-0010](adr/0010-session-time-as-active-time.md)).
+
 ## Storage
 
 - SQLite at `%ProgramData%\Keitora\keitora.db`, migrations with `rusqlite_migration`.
-- Directory ACL: write for `SYSTEM` only, read for users.
-- Logs with `tracing` to `%ProgramData%\Keitora\logs`, rotated daily, no personal data beyond what the user configured.
+- Directory ACL: write for `SYSTEM` and Administrators only, read for users: a protected DACL that inherits nothing from `C:\ProgramData`, which lets every user create files in its subfolders. Until T-5.3 sets it, any standard user can plant files in `Keitora` and `logs` ([threat-model.md](threat-model.md)).
+- Logs with `tracing` to `%ProgramData%\Keitora\logs`, one file per day (`keitora.YYYY-MM-DD.log`, UTC), the last 14 kept, never blocklists or other user data. If the folder can't be used, logs go to stderr and the service keeps running.
 
 ## Open questions
 

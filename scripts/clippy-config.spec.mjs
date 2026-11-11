@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Checks that the clippy.toml of keitora-core and keitora-ipc keeps up with the root one,
-// with Node's own test runner. Clippy reads only the clippy.toml nearest a crate, so those
-// two files replace the root one instead of adding to it, and have to repeat its settings
-// (see the top of crates/keitora-core/clippy.toml). These tests fail when they drift.
+// Checks that the clippy.toml of every crate keeps up with the root one, with Node's own
+// test runner. Clippy reads only the clippy.toml nearest a crate, so those files replace the
+// root one instead of adding to it, and have to repeat its settings (see the top of
+// crates/keitora-core/clippy.toml and crates/keitora-service/clippy.toml). These tests fail
+// when they drift.
 //
 // `just check` runs them (`just test-scripts`).
 //
@@ -23,7 +24,24 @@ function read(path) {
 }
 
 const ROOT = "clippy.toml";
+/** The pure crates' files, which ban `PURE_BANS`. */
 const CRATES = ["crates/keitora-core/clippy.toml", "crates/keitora-ipc/clippy.toml"];
+/** The other crates' files, which ban `PRODUCTION_BANS`. */
+const PRODUCTION_CRATES = [
+  "crates/keitora-service/clippy.toml",
+  "crates/keitora-nmh/clippy.toml",
+  "crates/keitora-sys/clippy.toml",
+  "apps/desktop/src-tauri/clippy.toml",
+];
+
+/**
+ * What the crates that aren't pure ban on top of the root file: the test clock of
+ * keitora-core, which in the service would let whoever moves it end a strict session (T-2.1,
+ * F1 security review).
+ */
+const PRODUCTION_BANS = {
+  "disallowed-types": ["keitora_core::clock::FakeClock"],
+};
 
 /**
  * What the crates ban on top of the root file, as AGENTS.md's "Hard rules" say: no system
@@ -189,6 +207,37 @@ for (const crate of CRATES) {
   test(`${crate} bans what a pure crate mustn't do`, () => {
     const own = parse(read(crate));
     for (const [key, banned] of Object.entries(PURE_BANS)) {
+      const listed = paths(own.get(key));
+      const missing = banned.filter((path) => !listed.includes(path));
+      assert.deepEqual(missing, [], `\`${key}\` lacks bans`);
+    }
+  });
+}
+
+test("every workspace member has one of the clippy.toml checked here", () => {
+  const members = /^members = \[\n((?:\s+"[^"]+",\n)*)\]$/m.exec(read("Cargo.toml"));
+  assert.ok(members !== null, "the root Cargo.toml has no `members = [` list, one per line");
+  const checked = [...CRATES, ...PRODUCTION_CRATES];
+  for (const [, member] of members[1].matchAll(/"([^"]+)"/g)) {
+    assert.ok(checked.includes(`${member}/clippy.toml`), `${member} has no clippy.toml checked here`);
+  }
+});
+
+test("the clippy.toml of the crates that aren't pure are identical", () => {
+  const [first, ...others] = PRODUCTION_CRATES.map(read);
+  for (const [index, text] of others.entries()) {
+    assert.equal(text, first, `${PRODUCTION_CRATES[index + 1]} differs from ${PRODUCTION_CRATES[0]}`);
+  }
+});
+
+for (const crate of PRODUCTION_CRATES) {
+  test(`${crate} has exactly the settings of the root clippy.toml, plus its bans`, () => {
+    assert.deepEqual(drift(read(ROOT), read(crate)), []);
+  });
+
+  test(`${crate} bans what production code mustn't use`, () => {
+    const own = parse(read(crate));
+    for (const [key, banned] of Object.entries(PRODUCTION_BANS)) {
       const listed = paths(own.get(key));
       const missing = banned.filter((path) => !listed.includes(path));
       assert.deepEqual(missing, [], `\`${key}\` lacks bans`);

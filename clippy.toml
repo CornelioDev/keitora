@@ -1,11 +1,15 @@
 # Clippy settings for the whole workspace. Which lints are enabled is decided
 # in [workspace.lints] in the root Cargo.toml; this file only tunes them.
 #
-# Clippy reads only the clippy.toml nearest a crate. keitora-core and
-# keitora-ipc have their own, which replaces this one and repeats its settings
-# before adding bans of their own: when you change a setting here, change it in
-# crates/keitora-core/clippy.toml and crates/keitora-ipc/clippy.toml too.
-# scripts/clippy-config.spec.mjs fails if you don't.
+# Clippy reads only the clippy.toml nearest a crate. Every crate of the
+# workspace has its own, which replaces this one and repeats its settings
+# before adding bans of its own: when you change a setting here, change it in
+# crates/keitora-core/clippy.toml and crates/keitora-ipc/clippy.toml (the pure
+# crates), and in crates/keitora-service/clippy.toml,
+# crates/keitora-nmh/clippy.toml, crates/keitora-sys/clippy.toml and
+# apps/desktop/src-tauri/clippy.toml too. scripts/clippy-config.spec.mjs
+# fails if you don't. This file still applies to anything without its own,
+# such as a crate added later.
 
 # A panic is how a test fails, so `unwrap()`, `expect()`, `panic!` and
 # indexing are fine inside `#[test]` functions and `#[cfg(test)]` modules.
