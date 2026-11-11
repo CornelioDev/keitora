@@ -37,11 +37,19 @@ pub enum StoreError {
         #[source]
         source: rusqlite::Error,
     },
-    /// The database's schema isn't exactly the one its version should have:
-    /// an object was added, removed or changed, as by planting a view or a
-    /// trigger. The file is left as it was.
-    #[error("the database's schema isn't the one its version should have")]
+    /// The database isn't exactly what the store writes at its version: an
+    /// object was added, removed or changed, as by planting a view or a
+    /// trigger; two tables share a root page; or its page size, auto-vacuum
+    /// or text encoding differ. The file is left as it was.
+    #[error("the database's schema or format isn't the one its version should have")]
     UnexpectedSchema,
+    /// The SQLite linked into this build has write-ahead logging, which
+    /// would let a planted `keitora.db-wal` file change what the store
+    /// reads. It happens when Keitora is built outside the repository or
+    /// against a system SQLite, without `.cargo/config.toml`'s flags
+    /// (ADR-0013). Nothing on disk was touched.
+    #[error("this build's SQLite has write-ahead logging, which the store refuses")]
+    SqliteWithWal,
     /// A write didn't change exactly the one row it should have, so it may
     /// not have been stored. Never happens with the store's own schema.
     #[error("the {what} wasn't stored")]

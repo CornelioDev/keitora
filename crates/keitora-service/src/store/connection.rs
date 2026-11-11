@@ -3,6 +3,8 @@
 //! Opening the SQLite connection and setting it up, in the order
 //! [`Store::open`](super::Store::open) calls these functions:
 //!
+//! 0. [`check_sqlite_build`]: refuses an SQLite with WAL, before touching
+//!    any file.
 //! 1. [`open`]: opens the file and sets every limit that needs no read of
 //!    it: no SQL from the file is trusted, triggers and views are off, and
 //!    no value larger than [`MAX_VALUE_BYTES`] is read.
@@ -63,6 +65,31 @@ const _: () = assert!(
     MAX_BLOCKLIST_JSON_BYTES < MAX_VALUE_BYTES as usize,
     "a valid blocklist's JSON must fit in MAX_VALUE_BYTES"
 );
+
+/// Checks that the SQLite linked into this build has no write-ahead
+/// logging, on an in-memory database, so before any file is touched.
+///
+/// `.cargo/config.toml` compiles WAL out, but only when cargo runs inside
+/// the repository with the bundled SQLite; a build from elsewhere, with
+/// `--config`, or with `LIBSQLITE3_SYS_USE_PKG_CONFIG` would have it. Then
+/// the store refuses to open rather than read a planted `-wal` file.
+///
+/// # Errors
+///
+/// [`StoreError::SqliteWithWal`] if it has WAL; [`StoreError::Database`]
+/// if SQLite can't answer.
+pub(super) fn check_sqlite_build() -> Result<(), StoreError> {
+    let probe = Connection::open_in_memory()?;
+    let omits_wal: i64 =
+        probe.query_row("SELECT sqlite_compileoption_used('OMIT_WAL')", [], |row| {
+            row.get(0)
+        })?;
+    if omits_wal == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::SqliteWithWal)
+    }
+}
 
 /// Opens the database file at `path`, creating it empty if it doesn't
 /// exist, and sets up the connection. Reads nothing from the file.
@@ -165,4 +192,18 @@ fn journal_checkpoint_pages(connection: &mut Connection) -> rusqlite::Result<()>
         [],
     )?;
     transaction.rollback()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn this_build_passes_the_sqlite_build_check() {
+        // Only the passing side can run here: `.cargo/config.toml` forces
+        // `SQLITE_OMIT_WAL` on every build inside the repository, so no test
+        // build can link an SQLite with WAL. The failing side,
+        // `StoreError::SqliteWithWal`, is checked by review.
+        check_sqlite_build().expect("this build's SQLite has no WAL");
+    }
 }

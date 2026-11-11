@@ -12,7 +12,8 @@
 //!
 //! # Stored data is untrusted
 //!
-//! Until T-5.3, any standard user can edit or replace the file, so the
+//! Until T-5.3, any standard user can plant the file before the service
+//! creates it, or inject pages into it through a planted journal, so the
 //! store checks everything it reads as it checks what it is given:
 //!
 //! - A blocklist passes [`Blocklist::validate`] before it is stored and
@@ -24,11 +25,13 @@
 //! - The engine snapshot's length is checked, in SQL, before it is read or
 //!   parsed ([`MAX_SNAPSHOT_BYTES`]); no other value longer than 8 MiB is
 //!   read at all.
-//! - The schema must be exactly the one its version should have
-//!   ([`StoreError::UnexpectedSchema`]), and SQL stored in the file never
-//!   runs: triggers and views are off, and so is WAL, which SQLite would
-//!   otherwise take from a `keitora.db-wal` file planted next to the
-//!   database.
+//! - When the store opens, the file must be exactly what it writes: schema,
+//!   root pages and format ([`StoreError::UnexpectedSchema`]), with no
+//!   damage `PRAGMA quick_check` can find ([`StoreError::Corrupt`]). SQL
+//!   stored in the file never runs: triggers and views are off, and so is
+//!   WAL, which SQLite would otherwise take from a `keitora.db-wal` file
+//!   planted next to the database; a build whose SQLite has WAL refuses to
+//!   open ([`StoreError::SqliteWithWal`]).
 //! - A file that isn't a database, is damaged, or comes from a newer schema
 //!   is refused with an error and **never deleted, reset or downgraded**:
 //!   that would also erase a strict session.
@@ -220,16 +223,20 @@ impl Store {
     ///
     /// # Errors
     ///
+    /// - [`StoreError::SqliteWithWal`] if this build's SQLite has
+    ///   write-ahead logging; nothing on disk is touched.
     /// - [`StoreError::CreateFolder`] if the folder can't be created.
     /// - [`StoreError::SchemaTooNew`] if the file's schema is newer than this
-    ///   build's, [`StoreError::Corrupt`] if its schema version is negative,
-    ///   and [`StoreError::UnexpectedSchema`] if its schema isn't the one
-    ///   its version should have. The file is left as it was.
+    ///   build's, [`StoreError::Corrupt`] if its schema version is negative
+    ///   or `quick_check` finds damage, and [`StoreError::UnexpectedSchema`]
+    ///   if its schema, format or root pages aren't what the store writes.
+    ///   The file is left as it was.
     /// - [`StoreError::Database`] if the file isn't a database, is damaged,
     ///   or can't be migrated, for instance because it can't be written.
     ///   The file is never deleted or reset.
     /// - [`StoreError::Migration`] if a migration fails for another reason.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
+        connection::check_sqlite_build()?;
         let data_dir = data_dir.as_ref();
         fs::create_dir_all(data_dir).map_err(|source| StoreError::CreateFolder { source })?;
         // Absolute, so that SQLite never reads the name as a URI.
@@ -990,6 +997,85 @@ mod tests {
         assert!(matches!(result, Err(StoreError::UnexpectedSchema)));
         drop(result);
         assert_eq!(fs::read(sandbox.db("data")).expect("reads"), before);
+    }
+
+    #[test]
+    fn two_tables_sharing_a_root_page_are_refused() {
+        // The review's reproduction (N1): with `engine_snapshot` pointing at
+        // the settings' B-tree, storing settings would overwrite the strict
+        // session's snapshot.
+        assert_schema_change_is_refused(
+            "shared_root_page",
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_schema
+                SET rootpage = (SELECT rootpage FROM sqlite_schema WHERE name = 'settings')
+              WHERE name = 'engine_snapshot';
+             PRAGMA writable_schema = OFF;",
+        );
+    }
+
+    #[test]
+    fn a_database_in_another_format_is_refused() {
+        for (name, pragma) in [
+            ("page_size", "PRAGMA page_size = 8192;"),
+            ("auto_vacuum", "PRAGMA auto_vacuum = FULL;"),
+            ("encoding", "PRAGMA encoding = 'UTF-16le';"),
+        ] {
+            let sandbox = Sandbox::new(&format!("format_{name}"));
+            fs::create_dir_all(sandbox.dir("data")).expect("creates");
+            // The store's own schema and version, in a file of another
+            // format, set before the first table is created.
+            let mut planted = raw(&sandbox.db("data"));
+            planted.execute_batch(pragma).expect("test setup");
+            schema::migrations()
+                .to_latest(&mut planted)
+                .expect("test setup");
+            drop(planted);
+            let before = fs::read(sandbox.db("data")).expect("reads");
+
+            let result = Store::open(sandbox.dir("data"));
+            assert!(
+                matches!(result, Err(StoreError::UnexpectedSchema)),
+                "{name}: {result:?}"
+            );
+            drop(result);
+            assert_eq!(fs::read(sandbox.db("data")).expect("reads"), before);
+        }
+    }
+
+    #[test]
+    fn a_damaged_page_is_found_when_opening_and_left_as_it_is() {
+        let sandbox = Sandbox::new("damaged_page");
+        let mut store = Store::open(sandbox.dir("data")).expect("opens");
+        store.put_blocklist(&blocklist("work")).expect("stores");
+        drop(store);
+        let root: u32 = raw(&sandbox.db("data"))
+            .query_row(
+                "SELECT rootpage FROM sqlite_schema WHERE name = 'blocklist'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("reads");
+        // Garbage over the blocklist page's cell pointers, past the header.
+        let mut file = fs::read(sandbox.db("data")).expect("reads");
+        let start = usize::try_from((root - 1) * 4096 + 8).expect("fits");
+        for byte in file.get_mut(start..start + 16).expect("in the file") {
+            *byte = 0xFF;
+        }
+        fs::write(sandbox.db("data"), &file).expect("damages");
+
+        let result = Store::open(sandbox.dir("data"));
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::Corrupt {
+                    what: "database file"
+                })
+            ),
+            "{result:?}"
+        );
+        drop(result);
+        assert_eq!(fs::read(sandbox.db("data")).expect("reads"), file);
     }
 
     #[test]

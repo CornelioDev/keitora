@@ -13,6 +13,8 @@
 # never opened, and a database whose header says WAL is refused.
 #
 # `force = true`: a `LIBSQLITE3_FLAGS` in the environment can't replace it.
-# Release builds must not set `LIBSQLITE3_SYS_USE_PKG_CONFIG`, which would
-# link a system SQLite and ignore these flags.
+# Cargo reads this file only when it runs inside the repository, and
+# `--config` or `LIBSQLITE3_SYS_USE_PKG_CONFIG` (a system SQLite) bypass it,
+# so release builds run cargo from here, with neither. A service built
+# without the flag refuses to open its store (`StoreError::SqliteWithWal`).
 LIBSQLITE3_FLAGS = { value = "-DSQLITE_OMIT_WAL", force = true }

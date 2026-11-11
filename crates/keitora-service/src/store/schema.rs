@@ -19,7 +19,10 @@
 //! have ([`verify`]): until T-5.3 any user can replace it, and an object
 //! planted in it, such as a view or a trigger named like a store table or a
 //! virtual table running SQLite's FTS or R-Tree code, could make writes
-//! vanish or run code the store doesn't expect.
+//! vanish or run code the store doesn't expect. Its format and the root
+//! page of each table are checked too.
+
+use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
@@ -108,23 +111,87 @@ fn read_schema(connection: &Connection) -> rusqlite::Result<Vec<SchemaRow>> {
     rows.collect()
 }
 
-/// Checks that the database's schema is exactly the one a database at
-/// `version` has: what the first `version` migrations create in an empty
-/// database, object for object, SQL text included. Reads only.
+/// The page size of every store database, in bytes: SQLite's default, which
+/// the engine snapshot's slot is sized for (one page, ADR-0013).
+const PAGE_SIZE: i64 = 4096;
+
+/// Checks that the database is exactly what the store would have written at
+/// `version`. Reads only; on error, the file is left as it was.
+///
+/// - **The schema**: what the first `version` migrations create in an empty
+///   database, object for object, SQL text included.
+/// - **The format**: 4096-byte pages, no auto-vacuum, UTF-8 text, as the
+///   store creates them.
+/// - **The root pages**: every table and index has its own B-tree. Two
+///   entries pointing at the same root page would make writes to one table
+///   overwrite rows of another, such as settings over the snapshot.
+/// - **The structure**: `PRAGMA quick_check`, which reads every page of the
+///   file once, so its cost grows with the file (history and block events
+///   included); it runs once per open.
+///
+/// It can't tell changed data in valid rows from real data: the store's
+/// readers check each value, and T-5.3 stops users from writing the file.
 ///
 /// # Errors
 ///
-/// [`StoreError::UnexpectedSchema`] if it isn't, with the file left as it
-/// was. [`StoreError::Database`] if the schema can't be read.
+/// [`StoreError::UnexpectedSchema`] if the schema, the format or the root
+/// pages differ. [`StoreError::Corrupt`] if `quick_check` finds damage.
+/// [`StoreError::Database`] if the file can't be read.
 pub(super) fn verify(connection: &Connection, version: i64) -> Result<(), StoreError> {
     let version = usize::try_from(version).map_err(|_| StoreError::UnexpectedSchema)?;
     let mut expected = Connection::open_in_memory()?;
     migrations().to_version(&mut expected, version)?;
-    if read_schema(connection)? == read_schema(&expected)? {
+    if read_schema(connection)? != read_schema(&expected)? {
+        return Err(StoreError::UnexpectedSchema);
+    }
+    check_format(connection)?;
+    check_root_pages(connection)?;
+    let check: String = connection.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+    if check != "ok" {
+        return Err(StoreError::Corrupt {
+            what: "database file",
+        });
+    }
+    Ok(())
+}
+
+/// Checks the page size, auto-vacuum and text encoding.
+///
+/// # Errors
+///
+/// [`StoreError::UnexpectedSchema`] if any differs from what the store
+/// creates; [`StoreError::Database`] if they can't be read.
+fn check_format(connection: &Connection) -> Result<(), StoreError> {
+    let page_size: i64 = connection.pragma_query_value(None, "page_size", |row| row.get(0))?;
+    let auto_vacuum: i64 = connection.pragma_query_value(None, "auto_vacuum", |row| row.get(0))?;
+    let encoding: String = connection.pragma_query_value(None, "encoding", |row| row.get(0))?;
+    if page_size == PAGE_SIZE && auto_vacuum == 0 && encoding == "UTF-8" {
         Ok(())
     } else {
         Err(StoreError::UnexpectedSchema)
     }
+}
+
+/// Checks that every table and index has a root page of its own.
+///
+/// # Errors
+///
+/// [`StoreError::UnexpectedSchema`] if a root page is missing, zero or
+/// shared; [`StoreError::Database`] if they can't be read.
+fn check_root_pages(connection: &Connection) -> Result<(), StoreError> {
+    let mut query = connection
+        .prepare("SELECT rootpage FROM sqlite_schema WHERE type IN ('table', 'index')")?;
+    let roots = query
+        .query_map([], |row| row.get::<_, Option<i64>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut seen = BTreeSet::new();
+    for root in roots {
+        match root {
+            Some(page) if page > 0 && seen.insert(page) => {}
+            _ => return Err(StoreError::UnexpectedSchema),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
