@@ -99,7 +99,7 @@ pnpm tauri dev
 pnpm lint && pnpm typecheck && pnpm test && pnpm build
 
 # Tests of the Node.js scripts
-node --test scripts/check-acceptance-tests.spec.mjs scripts/check-npm-audit.spec.mjs scripts/check-npm-licenses.spec.mjs scripts/check-unit-test-layout.spec.mjs scripts/clippy-config.spec.mjs
+node --test scripts/check-acceptance-tests.spec.mjs scripts/check-npm-audit.spec.mjs scripts/check-npm-licenses.spec.mjs scripts/check-unit-test-layout.spec.mjs scripts/clippy-config.spec.mjs scripts/run-on-staged.spec.mjs
 
 # Run the service without installing it (development)
 cargo run -p keitora-service -- --console
