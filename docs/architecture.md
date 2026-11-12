@@ -43,12 +43,15 @@ Every crate but `keitora-sys` has `#![forbid(unsafe_code)]`: a Win32 call that t
 ## IPC protocol (`keitora-ipc`)
 
 - **Transport:** named pipe in message mode, one JSON object per line. The pipe's DACL allows the interactive user and `SYSTEM` only.
-- **Envelope:** `{ "v": 1, "id": "<uuid>", "kind": "request" | "response" | "event", "payload": { … } }`.
-- **Requests:** `GetState`, `StartSession { blocklist_id, preset, lock }`, `StopSession`, `PauseSession`, `SkipBreak`, `ListBlocklists`, `UpsertBlocklist`, `DeleteBlocklist`, `GetSettings`, `UpdateSettings`, `ListInstalledApps`, `GetHistory { range }`, `Subscribe`.
-- **Events:** `StateChanged`, `PhaseChanged`, `TargetBlocked { target, kind, at }`, `SessionEnded`.
-- **Typed errors:** `StrictLockActive { until }`, `Validation { field, message }`, `NotFound`, `UnsupportedVersion { supported }`.
-- **Versioning:** additive changes keep `v`; breaking changes bump it. The service answers `UnsupportedVersion` instead of guessing.
-- **Limits:** maximum message size and request rate per connection, enforced before deserializing.
+- **Framing:** one frame per line: compact JSON ending in `
+`, at most `MAX_FRAME_LEN` (8 MiB) bytes without it. The length is checked on the raw bytes, before parsing; a longer line is refused and the reader skips the rest of it without storing it ([ADR-0014](adr/0014-ipc-protocol-wire-format.md)).
+- **Envelope:** `{ "v": 1, "id": "<id>", "kind": "request" | "response" | "event", "payload": { "type": "<snake_case name>", … } }`. The id is 1 to 64 bytes of ASCII letters, digits and `-`; a response carries the id of its request. The payload is flat: its fields sit next to `type`.
+- **Requests:** `GetState`, `StartSession { blocklist_id, preset, lock }`, `StopSession { text }`, `PauseSession`, `ResumeSession`, `SkipBreak`, `ListBlocklists { page }`, `GetBlocklist { id }`, `UpsertBlocklist { blocklist }`, `DeleteBlocklist { id }`, `GetSettings`, `UpdateSettings { settings }`, `ListInstalledApps { page }`, `GetHistory { range, page }`, `GetBlockEvents { page }`, `Subscribe`. Lists are paginated (`page` is `{ offset, limit }`, limit 1 to 100, and responses carry `next_offset`). No request carries a time, and none can end, shorten or re-time a session.
+- **Responses:** `Ok`, `Subscribed`, `State`, `Blocklists`, `Blocklist`, `Settings`, `InstalledApps`, `History`, `BlockEvents`, `Error { error }`.
+- **Events:** `StateChanged { state }` (it also reports phase changes), `TargetBlocked { event }`, `BlocklistChanged { id }`, `SessionEnded { outcome }`.
+- **Typed errors** (`{ "code": …}`): `strict_session_locked { reason }`, `validation { field, kind }`, `not_found`, `unsupported_version { supported }`, `frame_too_large { max }`, `malformed`, `invalid_state`, `internal`. They never echo the client's text nor internal details.
+- **Versioning:** `v` is one whole number, the major version. Additive changes keep it (unknown fields are ignored at every level); breaking changes bump it. A different `v` is answered with `unsupported_version` before the payload is read; an unknown `type` or `kind` is `malformed`, and the stream goes on.
+- **Validation:** the decoder validates every request (blocklists, presets, locks, ids, pages, typed text) and rejects what is out of range with `validation`, so an invalid value never reaches the service. Request rate per connection is limited by the pipe server (T-2.4).
 
 TypeScript types for the UI are generated from these Rust types (`tauri-specta`), so there is one definition of every message.
 
