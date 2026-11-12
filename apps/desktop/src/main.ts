@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+import { VueQueryPlugin } from "@tanstack/vue-query";
+import { createPinia } from "pinia";
 import { createApp } from "vue";
 import App from "./App.vue";
 import {
@@ -14,7 +16,8 @@ import "./styles/main.css";
 // (src/i18n.ts), and in English otherwise.
 const i18n = createAppI18n(detectLocale(preferredLanguages(navigator)));
 
-const app = createApp(App).use(i18n);
+// Pinia holds UI state; vue-query caches the service data (src/composables).
+const app = createApp(App).use(i18n).use(createPinia()).use(VueQueryPlugin);
 const stopLanguageSync = syncDocumentLanguage(
   i18n.global.locale,
   document.documentElement,
