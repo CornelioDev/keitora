@@ -23,8 +23,8 @@
     "@lucide/vue": "^1.70.0",
     "@tanstack/vue-query": "^5.107.1",
     "@tauri-apps/api": "^2",
-    "@unovis/ts": "^1.7.1",
-    "@unovis/vue": "^1.7.1",
+    "@unovis/ts": "^1.8.0",
+    "@unovis/vue": "^1.8.0",
     "@vueuse/core": "^15.0.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",
@@ -54,8 +54,8 @@
     "prettier": "^3.9.10",
     "tailwindcss": "^4.3.5",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.1",
-    "vite": "^8.3.6",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.7",
     "vitest": "^5.1.0",
     "vue-tsc": "^3.3.14"
   }
