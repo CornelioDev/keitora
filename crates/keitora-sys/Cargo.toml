@@ -13,10 +13,15 @@ publish.workspace = true
 # when you add a wrapper that needs it.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_WindowsProgramming",
 ] }
+# Only for `named_pipe`: creating a tokio pipe server with a security
+# descriptor is an `unsafe` tokio call, so it lives here (ADR-0012).
+tokio = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true

@@ -42,7 +42,7 @@ Every crate but `keitora-sys` has `#![forbid(unsafe_code)]`: a Win32 call that t
 
 ## IPC protocol (`keitora-ipc`)
 
-- **Transport:** named pipe in message mode, one JSON object per line. The pipe's DACL allows the interactive user and `SYSTEM` only.
+- **Transport:** named pipe in byte mode, one JSON object per line (frames are lines of text and may be longer than a pipe message, so message mode is not used). The pipe's DACL allows the interactive user and `SYSTEM` only; remote clients are rejected.
 - **Framing:** one frame per line: compact JSON ending in `
 `, at most `MAX_FRAME_LEN` (8 MiB) bytes without it. The length is checked on the raw bytes, before parsing; a longer line is refused and the reader skips the rest of it without storing it ([ADR-0014](adr/0014-ipc-protocol-wire-format.md)).
 - **Envelope:** `{ "v": 1, "id": "<id>", "kind": "request" | "response" | "event", "payload": { "type": "<snake_case name>", … } }`. The id is 1 to 64 bytes of ASCII letters, digits and `-`; a response carries the id of its request. The payload is flat: its fields sit next to `type`.
@@ -52,6 +52,7 @@ Every crate but `keitora-sys` has `#![forbid(unsafe_code)]`: a Win32 call that t
 - **Typed errors** (`{ "code": …}`): `strict_session_locked { reason }`, `validation { field, kind }`, `not_found`, `unsupported_version { supported }`, `frame_too_large { max }`, `malformed`, `invalid_state`, `internal`. They never echo the client's text nor internal details.
 - **Versioning:** `v` is one whole number, the major version. Additive changes keep it (unknown fields are ignored at every level); breaking changes bump it. A different `v` is answered with `unsupported_version` before the payload is read; an unknown `type` or `kind` is `malformed`, and the stream goes on.
 - **Validation:** the decoder validates every request (blocklists, presets, locks, ids, pages, typed text) and rejects what is out of range with `validation`, so an invalid value never reaches the service. Request rate per connection is limited by the pipe server (T-2.4).
+- **Pipe server limits (T-2.4):** at most 64 simultaneous connections (one beyond is closed at once); 50 requests a second sustained per connection with a burst of 100 (a faster client is slowed, not failed); at most 16 MiB (two maximum frames) waiting to be written to one connection, beyond which the connection is closed.
 
 TypeScript types for the UI are generated from these Rust types (`tauri-specta`), so there is one definition of every message.
 

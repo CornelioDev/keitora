@@ -41,6 +41,7 @@ url = { version = "2.5.8", default-features = false, features = ["std"] }
 # Our own crates, used by path. They are never published, so they have no
 # version, and Cargo.lock lists them without a `source`.
 keitora-core = { path = "crates/keitora-core" }
+keitora-ipc = { path = "crates/keitora-ipc" }
 keitora-sys = { path = "crates/keitora-sys" }
 
 # Error types in libraries (AGENTS.md, "Conventions").
@@ -78,6 +79,11 @@ rusqlite_migration = "2.7.0"
 # snapshot, whose formats keitora-core defines with serde.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+
+# Async I/O for the named-pipe server (keitora-service `pipe`, keitora-sys
+# `named_pipe`). Each crate turns on only the features it uses; the
+# multi-threaded runtime (`rt-multi-thread`) is not needed.
+tokio = { version = "1.54.1", default-features = false }
 
 [profile.release]
 # Integer overflow panics, as in debug builds, instead of silently wrapping:

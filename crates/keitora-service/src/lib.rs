@@ -13,7 +13,8 @@
 //!
 //! The service keeps its files in a data folder ([`data_dir`]) and logs to
 //! daily files inside it ([`logging`]); its database, `keitora.db`, is
-//! there too ([`store`]). Time comes from [`clock::SystemClock`].
+//! there too ([`store`]). Time comes from [`clock::SystemClock`]. Clients
+//! reach it over the named pipe served by [`pipe`].
 //!
 //! This crate contains no `unsafe` code: Win32 calls go through the safe
 //! wrappers of `keitora-sys` (ADR-0012).
@@ -29,6 +30,7 @@ pub mod clock;
 pub mod console;
 pub mod data_dir;
 pub mod logging;
+pub mod pipe;
 pub mod runtime;
 pub mod service;
 pub mod store;
