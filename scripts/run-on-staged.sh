@@ -59,26 +59,40 @@ if [ -z "$extensions" ] || [ "$#" -eq 0 ]; then
     usage
 fi
 
+# Git runs from the top of the work tree, not from <dir>. A hook of a linked
+# worktree gets an absolute GIT_DIR and no GIT_WORK_TREE, so Git takes the
+# current directory as the work tree root and `--relative` run from <dir> would
+# strip nothing. With the top level and an explicit `--relative=<dir>`, the
+# result is the same in the main checkout and in a linked worktree.
+top=$(git rev-parse --show-toplevel)
+
 # A package that does not exist has nothing staged.
-if [ ! -d "$dir" ]; then
+if [ ! -d "$top/$dir" ]; then
     exit 0
 fi
-cd "$dir"
+prefix=
+relative=
+if [ "$dir" != . ]; then
+    dir=${dir%/}
+    prefix="$dir/"
+    relative="--relative=$dir"
+fi
 
 # Git pathspecs: `**/*.ts` matches at any depth, including directly in <dir>.
 pathspecs=
 for extension in $extensions; do
-    pathspecs="$pathspecs :(glob)**/*.$extension"
+    pathspecs="$pathspecs :(glob)$prefix**/*.$extension"
 done
 for exclude in $excludes; do
-    pathspecs="$pathspecs :(exclude)$exclude"
+    pathspecs="$pathspecs :(exclude)$prefix$exclude"
 done
 
 # Added, copied, modified or renamed files (not deleted ones), NUL-separated.
-# Run from <dir>, `--relative` keeps only the files under it and prints their
-# paths relative to it. `xargs -0 -r` passes them on as separate arguments and
-# does not run the command when there are none; it splits a very long list
-# over several runs of the command, and fails if any of them fails.
-# shellcheck disable=SC2086 # $pathspecs is split on purpose, see `set -f` above.
-git diff --cached --name-only --diff-filter=ACMR -z --relative --line-prefix=./ -- $pathspecs |
-    xargs -0 -r "$@"
+# `--relative=<dir>` keeps only the files under <dir> and prints their paths
+# relative to it. `xargs -0 -r` passes them on as separate arguments and does
+# not run the command when there are none; it splits a very long list over
+# several runs of the command, and fails if any of them fails. The command runs
+# in <dir>.
+# shellcheck disable=SC2086 # $pathspecs and $relative are split on purpose, see `set -f` above.
+git -C "$top" diff --cached --name-only --diff-filter=ACMR -z $relative --line-prefix=./ -- $pathspecs |
+    (cd "$top/$dir" && xargs -0 -r "$@")

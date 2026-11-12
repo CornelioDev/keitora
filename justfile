@@ -79,7 +79,7 @@ extension:
 
 # Test the scripts in scripts/ that run on Node.js
 test-scripts:
-    node --test scripts/check-acceptance-tests.spec.mjs scripts/check-npm-audit.spec.mjs scripts/check-npm-licenses.spec.mjs scripts/check-unit-test-layout.spec.mjs scripts/clippy-config.spec.mjs
+    node --test scripts/check-acceptance-tests.spec.mjs scripts/check-npm-audit.spec.mjs scripts/check-npm-licenses.spec.mjs scripts/check-unit-test-layout.spec.mjs scripts/clippy-config.spec.mjs scripts/run-on-staged.spec.mjs
 
 # Not part of `check`: a new advisory can fail it with no change in the repository,
 # and CI runs it as a job of its own. Licenses aren't part of it: see `npm-licenses`.
