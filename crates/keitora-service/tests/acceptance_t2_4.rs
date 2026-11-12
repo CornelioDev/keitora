@@ -401,7 +401,7 @@ fn current_user_sid() -> String {
         .args(["/user", "/fo", "csv", "/nh"])
         .output()
         .expect("whoami runs");
-    let text = String::from_utf8(output.stdout).expect("utf-8");
+    let text = String::from_utf8_lossy(&output.stdout);
     text.trim()
         .rsplit(',')
         .next()
