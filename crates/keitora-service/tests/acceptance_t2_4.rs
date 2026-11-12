@@ -382,6 +382,8 @@ fn default_pipe_name_is_keitora() {
 fn pipe_sddl(name: &str) -> String {
     let script = format!("(Get-Acl -LiteralPath '{name}').Sddl");
     let output = Command::new("powershell")
+        // A PSModulePath inherited from PowerShell 7 breaks module autoload in Windows PowerShell 5.1.
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .expect("powershell runs");
