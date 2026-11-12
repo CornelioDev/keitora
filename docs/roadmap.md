@@ -124,7 +124,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
 
 - [ ] **T-3.1** `src-tauri` IPC client: Tauri commands forward to the pipe, service events are re-emitted to the frontend; TS bindings generated with `tauri-specta`.
   - Depends on: T-2.4
-- [ ] **T-3.2** Data layer: `services/ipc.ts`, composables on `@tanstack/vue-query` (`useEngineState`, `useBlocklists`, `useSettings`), Pinia store for UI state; invalidate queries on service events.
+- [~] **T-3.2** Data layer: `services/ipc.ts`, composables on `@tanstack/vue-query` (`useEngineState`, `useBlocklists`, `useSettings`), Pinia store for UI state; invalidate queries on service events.
 - [ ] **T-3.3** App shell: shadcn-vue `Sidebar` (Timer, Blocklists, History, Settings), custom title bar, Vue Router, theme following the OS.
 - [ ] **T-3.4** **Timer** page (idle): `TimerRing`, preset select, blocklist select, strict switch, Start.
 - [ ] **T-3.5** **Active session** page: remaining time, phase, cycle, `StrictLockBanner`, disabled Stop with explanation, blocks this session.
