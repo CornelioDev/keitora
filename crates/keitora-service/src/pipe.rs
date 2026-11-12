@@ -66,7 +66,7 @@ pub const PIPE_NAME: &str = r"\\.\pipe\keitora";
 ///
 /// **Accepted risk (M1):** because of that right, the interactive user can
 /// still create extra instances of the pipe, and so answer clients in the
-/// service's place or use up instances ([`MAX_INSTANCES`] bounds the latter).
+/// service's place or use up instances (a cap on instances bounds the latter).
 /// The fix is a narrower DACL (no `FILE_CREATE_PIPE_INSTANCE`) together with a
 /// `keitora-sys` wrapper that opens the pipe with an explicit access mask,
 /// because tokio's client always asks for `GENERIC_WRITE`. It is planned as a
