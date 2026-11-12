@@ -15,12 +15,17 @@ name = "keitora_service"
 
 [dependencies]
 keitora-core.workspace = true
+keitora-ipc.workspace = true
 keitora-sys.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# One current-thread runtime for the pipe server: `sync` for its channels and
+# semaphore, `macros` for `select!`, `net` and `io-util` for the pipe, `time`
+# for the rate limit.
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "sync", "macros"] }
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true

@@ -30,6 +30,8 @@
 
 pub mod console;
 pub mod library_loader;
+pub mod named_pipe;
+pub mod security;
 pub mod time;
 
 #[cfg(test)]
