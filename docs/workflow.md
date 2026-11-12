@@ -21,15 +21,15 @@ Subagent definitions live in [`.claude/agents/`](../.claude/agents/).
 
 The maintainer starts a task with: **"Run task T-x.y"** (or several, see *Running a group of tasks*). The orchestrator then:
 
-1. **Prepare.** Check that the task's dependencies are done. Create a branch `task/t<phase>-<n>-<short-slug>` (e.g. `task/t1-3-pomodoro-state-machine`) from `main`. Mark the task `[~]` in the roadmap.
+1. **Prepare.** Check that the task's dependencies are done. Create a branch `task/t<phase>-<n>-<short-slug>` (e.g. `task/t1-3-pomodoro-state-machine`) from `main`. Mark the task `[~]` in the roadmap, and move its issue to *In progress* on the [project board](#project-board).
 2. **Tests first.** Invoke `qa-engineer` in `write-tests` mode. Record the commit hash of the acceptance tests. If QA reports ambiguous criteria → stop and ask the maintainer.
 3. **Implement.** Invoke `developer` with the task ID and the tests commit hash. If the developer reports a wrong test → stop and ask the maintainer.
 4. **Automated checks.** Run `just check`. If anything fails, send the failure back to `developer` (step 3).
 5. **Independent review.** Invoke `qa-engineer` in `validate` mode and `security-reviewer` in parallel. If either returns FAIL, send the findings to `developer` (step 3).
 6. **Retry limit.** After **3** round-trips from step 4 or 5 back to step 3, stop and escalate to the maintainer with the reports so far.
-7. **Report.** Compile the maintainer report (template below) and **stop**. Do not merge.
-8. **On approval** ("aprobado" / "approved"): tick the task `[x]`, update **Current status**, add ADRs the developer flagged, and push the branch. `CHANGELOG.md` isn't edited by hand: `release-please` generates it from the squash commit, so the type in the pull request's title, which becomes its subject, normally decides whether the change is listed (`feat`, `fix`, `perf`, `revert`) or not ([CONTRIBUTING.md](../CONTRIBUTING.md#what-decides-the-version)). Open a pull request to `main` titled with the squash commit's subject (`feat(core): add pomodoro state machine (T-1.3)`; GitHub appends ` (#N)`), wait for the required checks, squash-merge it on GitHub, and delete the branch ([CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests) has the command, and how the subject and the DCO sign-off carry over). `main` takes no direct push: its ruleset's `pull_request` rule requires a pull request, with an empty bypass list.
-   **On rejection:** take the maintainer's feedback to `developer` (step 3) and continue.
+7. **Report.** Compile the maintainer report (template below), move the task's issue to *Awaiting approval*, and **stop**. Do not merge.
+8. **On approval** ("aprobado" / "approved"): tick the task `[x]`, update **Current status**, add ADRs the developer flagged, and push the branch. `CHANGELOG.md` isn't edited by hand: `release-please` generates it from the squash commit, so the type in the pull request's title, which becomes its subject, normally decides whether the change is listed (`feat`, `fix`, `perf`, `revert`) or not ([CONTRIBUTING.md](../CONTRIBUTING.md#what-decides-the-version)). Open a pull request to `main` titled with the squash commit's subject (`feat(core): add pomodoro state machine (T-1.3)`; GitHub appends ` (#N)`), with `Closes #<the task's issue>` in its description, wait for the required checks, squash-merge it on GitHub, and delete the branch ([CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests) has the command, and how the subject and the DCO sign-off carry over). `main` takes no direct push: its ruleset's `pull_request` rule requires a pull request, with an empty bypass list.
+   **On rejection:** move the task's issue back to *In progress*, take the maintainer's feedback to `developer` (step 3) and continue.
 
 Reports to the maintainer are written in **Spanish**. Everything committed to the repository stays in English.
 
@@ -48,6 +48,15 @@ The maintainer can also start several consecutive tasks at once, usually one gro
 - On approval, step 8 is done for each task in order, giving one pull request and one squash commit per task on `main`. CI only runs on pull requests to `main`, so a task's pull request opens when the one before it has merged: rebase the task's own commits onto `main` first (`git rebase --onto main <previous task's branch>`). If the maintainer rejects a task, the tasks before it can still be merged; the rejected task goes back to step 3, and the tasks after it are rebased onto the fixed branch and checked again.
 
 Tasks are still run one at a time; this changes when the maintainer approves, not how many loops run in parallel (see *Working in parallel*).
+
+## Project board
+
+The public [Keitora project](https://github.com/users/CornelioDev/projects/4) shows the roadmap's tasks and the open issues. [docs/roadmap.md](roadmap.md) stays the source of truth for a task's scope, acceptance criteria and status; the board mirrors it, and when the two disagree the roadmap wins.
+
+- **One issue per task.** From F2 on, every roadmap task has an issue titled `T-x.y: <short name>`. Its body holds the task's text and sub-bullets, with links to the issues it depends on. It is in the phase's milestone and has the area label. When a task is added to the roadmap, the orchestrator creates its issue and adds it to the board.
+- **Status.** *Todo*, then *In progress* (steps 1 to 6), then *Awaiting approval* (step 7), then *Done*. The orchestrator moves the issue through the first three. A pull request with `Closes #N` closes the issue when it merges, and the board's built-in workflows set it to *Done*.
+- **Other issues.** Security findings and other issues are added to the board too. The *Security* view lists the open issues labeled `security`.
+- **Permissions.** Moving an item needs a token with the `project` scope. The orchestrator uses a separate classic token with that scope only, kept apart from the token it uses for the repository.
 
 ## Acceptance tests are protected
 
