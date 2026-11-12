@@ -1,0 +1,595 @@
+[
+  {
+    "name": "req_get_state",
+    "frame": {
+      "v": 1,
+      "id": "t-req-get-state",
+      "kind": "request",
+      "payload": {
+        "type": "get_state"
+      }
+    }
+  },
+  {
+    "name": "req_start_session",
+    "frame": {
+      "v": 1,
+      "id": "t-req-start-session",
+      "kind": "request",
+      "payload": {
+        "type": "start_session",
+        "blocklist_id": "work",
+        "preset": {
+          "focus_min": 25,
+          "short_break_min": 5,
+          "long_break_min": 15,
+          "cycles": 4
+        },
+        "lock": {
+          "kind": "until_timer_ends"
+        }
+      }
+    }
+  },
+  {
+    "name": "req_stop_session_without_text",
+    "frame": {
+      "v": 1,
+      "id": "t-req-stop-session-without-text",
+      "kind": "request",
+      "payload": {
+        "type": "stop_session",
+        "text": null
+      }
+    }
+  },
+  {
+    "name": "req_stop_session_with_text",
+    "frame": {
+      "v": 1,
+      "id": "t-req-stop-session-with-text",
+      "kind": "request",
+      "payload": {
+        "type": "stop_session",
+        "text": "k3Zq9x"
+      }
+    }
+  },
+  {
+    "name": "req_pause_session",
+    "frame": {
+      "v": 1,
+      "id": "t-req-pause-session",
+      "kind": "request",
+      "payload": {
+        "type": "pause_session"
+      }
+    }
+  },
+  {
+    "name": "req_resume_session",
+    "frame": {
+      "v": 1,
+      "id": "t-req-resume-session",
+      "kind": "request",
+      "payload": {
+        "type": "resume_session"
+      }
+    }
+  },
+  {
+    "name": "req_skip_break",
+    "frame": {
+      "v": 1,
+      "id": "t-req-skip-break",
+      "kind": "request",
+      "payload": {
+        "type": "skip_break"
+      }
+    }
+  },
+  {
+    "name": "req_list_blocklists",
+    "frame": {
+      "v": 1,
+      "id": "t-req-list-blocklists",
+      "kind": "request",
+      "payload": {
+        "type": "list_blocklists",
+        "page": {
+          "offset": 0,
+          "limit": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "req_get_blocklist",
+    "frame": {
+      "v": 1,
+      "id": "t-req-get-blocklist",
+      "kind": "request",
+      "payload": {
+        "type": "get_blocklist",
+        "id": "work"
+      }
+    }
+  },
+  {
+    "name": "req_upsert_blocklist",
+    "frame": {
+      "v": 1,
+      "id": "t-req-upsert-blocklist",
+      "kind": "request",
+      "payload": {
+        "type": "upsert_blocklist",
+        "blocklist": {
+          "id": "work",
+          "name": "Work",
+          "color": "#3366ff",
+          "targets": [
+            {
+              "kind": "site",
+              "pattern": "youtube.com"
+            },
+            {
+              "kind": "app",
+              "name": "Steam",
+              "ids": {
+                "windows_exe": "steam.exe"
+              }
+            }
+          ],
+          "exceptions": [
+            "music.youtube.com"
+          ],
+          "block_during_breaks": false
+        }
+      }
+    }
+  },
+  {
+    "name": "req_delete_blocklist",
+    "frame": {
+      "v": 1,
+      "id": "t-req-delete-blocklist",
+      "kind": "request",
+      "payload": {
+        "type": "delete_blocklist",
+        "id": "work"
+      }
+    }
+  },
+  {
+    "name": "req_get_settings",
+    "frame": {
+      "v": 1,
+      "id": "t-req-get-settings",
+      "kind": "request",
+      "payload": {
+        "type": "get_settings"
+      }
+    }
+  },
+  {
+    "name": "req_update_settings",
+    "frame": {
+      "v": 1,
+      "id": "t-req-update-settings",
+      "kind": "request",
+      "payload": {
+        "type": "update_settings",
+        "settings": {
+          "default_preset": {
+            "focus_min": 25,
+            "short_break_min": 5,
+            "long_break_min": 15,
+            "cycles": 4
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "req_list_installed_apps",
+    "frame": {
+      "v": 1,
+      "id": "t-req-list-installed-apps",
+      "kind": "request",
+      "payload": {
+        "type": "list_installed_apps",
+        "page": {
+          "offset": 20,
+          "limit": 20
+        }
+      }
+    }
+  },
+  {
+    "name": "req_get_history",
+    "frame": {
+      "v": 1,
+      "id": "t-req-get-history",
+      "kind": "request",
+      "payload": {
+        "type": "get_history",
+        "range": "week",
+        "page": {
+          "offset": 20,
+          "limit": 20
+        }
+      }
+    }
+  },
+  {
+    "name": "req_get_block_events",
+    "frame": {
+      "v": 1,
+      "id": "t-req-get-block-events",
+      "kind": "request",
+      "payload": {
+        "type": "get_block_events",
+        "page": {
+          "offset": 20,
+          "limit": 20
+        }
+      }
+    }
+  },
+  {
+    "name": "req_subscribe",
+    "frame": {
+      "v": 1,
+      "id": "t-req-subscribe",
+      "kind": "request",
+      "payload": {
+        "type": "subscribe"
+      }
+    }
+  },
+  {
+    "name": "res_ok",
+    "frame": {
+      "v": 1,
+      "id": "t-res-ok",
+      "kind": "response",
+      "payload": {
+        "type": "ok"
+      }
+    }
+  },
+  {
+    "name": "res_subscribed",
+    "frame": {
+      "v": 1,
+      "id": "t-res-subscribed",
+      "kind": "response",
+      "payload": {
+        "type": "subscribed"
+      }
+    }
+  },
+  {
+    "name": "res_state",
+    "frame": {
+      "v": 1,
+      "id": "t-res-state",
+      "kind": "response",
+      "payload": {
+        "type": "state",
+        "state": {
+          "phase": "focus",
+          "cycle": 2,
+          "remaining_ms": 1234567,
+          "paused": false,
+          "lock": {
+            "kind": "until_timer_ends"
+          },
+          "blocklist_id": "work"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_blocklists",
+    "frame": {
+      "v": 1,
+      "id": "t-res-blocklists",
+      "kind": "response",
+      "payload": {
+        "type": "blocklists",
+        "items": [
+          {
+            "id": "work",
+            "name": "Work",
+            "color": "#3366ff"
+          }
+        ],
+        "next_offset": null
+      }
+    }
+  },
+  {
+    "name": "res_blocklist",
+    "frame": {
+      "v": 1,
+      "id": "t-res-blocklist",
+      "kind": "response",
+      "payload": {
+        "type": "blocklist",
+        "blocklist": {
+          "id": "work",
+          "name": "Work",
+          "color": "#3366ff",
+          "targets": [
+            {
+              "kind": "site",
+              "pattern": "youtube.com"
+            },
+            {
+              "kind": "app",
+              "name": "Steam",
+              "ids": {
+                "windows_exe": "steam.exe"
+              }
+            }
+          ],
+          "exceptions": [
+            "music.youtube.com"
+          ],
+          "block_during_breaks": false
+        }
+      }
+    }
+  },
+  {
+    "name": "res_settings",
+    "frame": {
+      "v": 1,
+      "id": "t-res-settings",
+      "kind": "response",
+      "payload": {
+        "type": "settings",
+        "settings": {
+          "default_preset": {
+            "focus_min": 25,
+            "short_break_min": 5,
+            "long_break_min": 15,
+            "cycles": 4
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "res_installed_apps",
+    "frame": {
+      "v": 1,
+      "id": "t-res-installed-apps",
+      "kind": "response",
+      "payload": {
+        "type": "installed_apps",
+        "items": [
+          {
+            "name": "Steam",
+            "windows_exe": "steam.exe"
+          }
+        ],
+        "next_offset": 20
+      }
+    }
+  },
+  {
+    "name": "res_history",
+    "frame": {
+      "v": 1,
+      "id": "t-res-history",
+      "kind": "response",
+      "payload": {
+        "type": "history",
+        "items": [
+          {
+            "started_at_unix_ms": 1700000000000,
+            "blocklist_id": "work",
+            "preset": {
+              "focus_min": 25,
+              "short_break_min": 5,
+              "long_break_min": 15,
+              "cycles": 4
+            },
+            "lock": {
+              "kind": "none"
+            },
+            "outcome": "completed",
+            "focus_ms": 6000000
+          }
+        ],
+        "next_offset": null
+      }
+    }
+  },
+  {
+    "name": "res_block_events",
+    "frame": {
+      "v": 1,
+      "id": "t-res-block-events",
+      "kind": "response",
+      "payload": {
+        "type": "block_events",
+        "items": [
+          {
+            "at_unix_ms": 1700000001000,
+            "kind": "site",
+            "target": "youtube.com"
+          }
+        ],
+        "next_offset": null
+      }
+    }
+  },
+  {
+    "name": "res_error_strict_session_locked",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-strict-session-locked",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "strict_session_locked",
+          "reason": "until_timer_ends"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_validation",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-validation",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "validation",
+          "field": "blocklist.name",
+          "kind": "empty"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_not_found",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-not-found",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "not_found"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_unsupported_version",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-unsupported-version",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "unsupported_version",
+          "supported": [
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_malformed",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-malformed",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "malformed"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_invalid_state",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-invalid-state",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "invalid_state"
+        }
+      }
+    }
+  },
+  {
+    "name": "res_error_internal",
+    "frame": {
+      "v": 1,
+      "id": "t-res-error-internal",
+      "kind": "response",
+      "payload": {
+        "type": "error",
+        "error": {
+          "code": "internal"
+        }
+      }
+    }
+  },
+  {
+    "name": "evt_state_changed",
+    "frame": {
+      "v": 1,
+      "id": "t-evt-state-changed",
+      "kind": "event",
+      "payload": {
+        "type": "state_changed",
+        "state": {
+          "phase": "focus",
+          "cycle": 2,
+          "remaining_ms": 1234567,
+          "paused": false,
+          "lock": {
+            "kind": "until_timer_ends"
+          },
+          "blocklist_id": "work"
+        }
+      }
+    }
+  },
+  {
+    "name": "evt_target_blocked",
+    "frame": {
+      "v": 1,
+      "id": "t-evt-target-blocked",
+      "kind": "event",
+      "payload": {
+        "type": "target_blocked",
+        "event": {
+          "at_unix_ms": 1700000001000,
+          "kind": "app",
+          "target": "Steam"
+        }
+      }
+    }
+  },
+  {
+    "name": "evt_blocklist_changed",
+    "frame": {
+      "v": 1,
+      "id": "t-evt-blocklist-changed",
+      "kind": "event",
+      "payload": {
+        "type": "blocklist_changed",
+        "id": "work"
+      }
+    }
+  },
+  {
+    "name": "evt_session_ended",
+    "frame": {
+      "v": 1,
+      "id": "t-evt-session-ended",
+      "kind": "event",
+      "payload": {
+        "type": "session_ended",
+        "outcome": "stopped"
+      }
+    }
+  }
+]
