@@ -191,7 +191,7 @@ export function tokenize(source) {
  * list, and deletes its placeholder, once it has tested code: the placeholder only
  * gives `just coverage` a line to measure in a crate that has none.
  */
-export const PLACEHOLDER_CRATES = new Set(["keitora-ipc"]);
+export const PLACEHOLDER_CRATES = new Set();
 
 /** The one inline test allowed, in the `src/lib.rs` of the crates above, until it is deleted. */
 const PLACEHOLDER = tokenTexts(`

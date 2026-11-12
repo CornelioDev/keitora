@@ -517,8 +517,8 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 let workspaces = 0;
 
 /**
- * A workspace laid out like this repository's: keitora-core with no code yet, and
- * keitora-ipc at its placeholder.
+ * A workspace laid out like this repository's: keitora-core and keitora-ipc, neither
+ * with a placeholder test (no crate is in `PLACEHOLDER_CRATES`).
  */
 class Workspace {
   constructor(parent = "plain") {
@@ -536,10 +536,9 @@ class Workspace {
       "crates/other/src/lib.rs": "",
     });
     for (const name of ["keitora-core", "keitora-ipc"]) {
-      const placeholder = name === "keitora-ipc" ? `\n${PLACEHOLDER}` : "";
       this.write({
         [`crates/${name}/Cargo.toml`]: manifest(name),
-        [`crates/${name}/src/lib.rs`]: `//! Docs.\n\n#![forbid(unsafe_code)]\n${placeholder}`,
+        [`crates/${name}/src/lib.rs`]: `//! Docs.\n\n#![forbid(unsafe_code)]\n`,
       });
     }
   }
@@ -608,7 +607,7 @@ function violationBatch(title, code, cases) {
   });
 }
 
-test("exit 0: keitora-ipc with its placeholder, and keitora-core with none", () => {
+test("exit 0: neither crate has a placeholder", () => {
   const { stdout } = new Workspace().expect(PASS);
   assert.match(stdout, /all fine/);
 });
@@ -629,7 +628,7 @@ test("exit 0: sibling test files, in each accepted form", () => {
     [`${CORE}/rules/mod.rs`]: "//! Docs.\n\n#[cfg(test)]\nmod tests;\n",
     [`${CORE}/rules/tests/mod.rs`]: "mod more;\n#[test]\nfn a() {}\n",
     [`${CORE}/rules/tests/more.rs`]: "#[test]\nfn b() {}\n",
-    [`${IPC}/lib.rs`]: `#[path = "../other/a b.rs"]\npub mod a;\n${PLACEHOLDER}`,
+    [`${IPC}/lib.rs`]: `#[path = "../other/a b.rs"]\npub mod a;\n`,
     "crates/keitora-ipc/other/a b.rs": A,
   });
   workspace.expect(PASS);
