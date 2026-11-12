@@ -8,5 +8,14 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+keitora-core.workspace = true
+serde.workspace = true
+# `raw_value` lets the decoder keep a message's payload as a borrowed slice of
+# the frame while it reads the envelope, so nothing is copied into a buffer
+# before the version is checked.
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+
 [lints]
 workspace = true

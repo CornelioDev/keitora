@@ -30,6 +30,10 @@ disallowed-methods = [
     { path = "str::split_at_mut", reason = "panics if out of range or not on a char boundary; use `split_at_mut_checked`" },
     { path = "core::iter::Iterator::sum", reason = "panics on overflow; use `try_fold` with `checked_add`" },
     { path = "core::iter::Iterator::product", reason = "panics on overflow; use `try_fold` with `checked_mul`" },
+    { path = "core::iter::Sum::sum", reason = "panics on overflow; use `try_fold` with `checked_add`" },
+    { path = "core::iter::Product::product", reason = "panics on overflow; use `try_fold` with `checked_mul`" },
+    { path = "alloc::vec::Vec::split_off", reason = "panics if out of range; use `split_at_checked` on the slice and copy" },
+    { path = "alloc::string::String::split_off", reason = "panics if out of range or not on a char boundary; use `get` and copy" },
 
     # --- keitora-core and keitora-ipc only ----------------------------------
 
