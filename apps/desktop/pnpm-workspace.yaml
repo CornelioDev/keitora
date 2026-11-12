@@ -21,7 +21,11 @@ minimumReleaseAge: 1440
 # that is not listed. None of the current dependencies needs one. Review a
 # package before adding it here.
 strictDepBuilds: true
-allowBuilds: {}
+allowBuilds:
+  # vue-demi (a dependency of @tanstack/vue-query and pinia) has a postinstall
+  # that only rewires its entry points for Vue 2; its defaults already target
+  # Vue 3, which is what the app uses. Declared as not run.
+  vue-demi: false
 
 # Only direct dependencies may come from a Git repository or a tarball URL;
 # the dependencies they pull in must come from the registry.
