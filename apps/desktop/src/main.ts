@@ -10,6 +10,7 @@ import {
   preferredLanguages,
   syncDocumentLanguage,
 } from "./i18n";
+import { createAppQueryClient } from "./queryClient";
 import "./styles/main.css";
 
 // The app starts in the user's language when it has translations for it
@@ -17,7 +18,10 @@ import "./styles/main.css";
 const i18n = createAppI18n(detectLocale(preferredLanguages(navigator)));
 
 // Pinia holds UI state; vue-query caches the service data (src/composables).
-const app = createApp(App).use(i18n).use(createPinia()).use(VueQueryPlugin);
+const app = createApp(App)
+  .use(i18n)
+  .use(createPinia())
+  .use(VueQueryPlugin, { queryClient: createAppQueryClient() });
 const stopLanguageSync = syncDocumentLanguage(
   i18n.global.locale,
   document.documentElement,
