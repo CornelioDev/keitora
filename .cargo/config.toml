@@ -1,0 +1,20 @@
+# Cargo configuration for every build run inside this repository, including
+# `just check`, `just coverage` and CI.
+
+[env]
+# Extra C compiler flags for the SQLite that `libsqlite3-sys` bundles into
+# keitora-service (its build script reads this variable; ADR-0013).
+#
+# `SQLITE_OMIT_WAL` compiles write-ahead logging out. Otherwise SQLite reads a
+# `keitora.db-wal` file it finds next to the database before every read, even
+# when the store never asked for WAL, so any user who can create files in the
+# data folder (until T-5.3) could make the service read, and write back into
+# the database, pages of their choice. Without WAL, a planted `-wal` file is
+# never opened, and a database whose header says WAL is refused.
+#
+# `force = true`: a `LIBSQLITE3_FLAGS` in the environment can't replace it.
+# Cargo reads this file only when it runs inside the repository, and
+# `--config` or `LIBSQLITE3_SYS_USE_PKG_CONFIG` (a system SQLite) bypass it,
+# so release builds run cargo from here, with neither. A service built
+# without the flag refuses to open its store (`StoreError::SqliteWithWal`).
+LIBSQLITE3_FLAGS = { value = "-DSQLITE_OMIT_WAL", force = true }

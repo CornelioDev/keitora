@@ -12,7 +12,8 @@
 //! - [`console`]: in the foreground of a terminal, for development builds only.
 //!
 //! The service keeps its files in a data folder ([`data_dir`]) and logs to
-//! daily files inside it ([`logging`]). Time comes from [`clock::SystemClock`].
+//! daily files inside it ([`logging`]); its database, `keitora.db`, is
+//! there too ([`store`]). Time comes from [`clock::SystemClock`].
 //!
 //! This crate contains no `unsafe` code: Win32 calls go through the safe
 //! wrappers of `keitora-sys` (ADR-0012).
@@ -30,6 +31,7 @@ pub mod data_dir;
 pub mod logging;
 pub mod runtime;
 pub mod service;
+pub mod store;
 
 /// The executable's name, which starts every message it prints on stderr.
 pub const PROGRAM_NAME: &str = "keitora-service";
