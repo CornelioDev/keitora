@@ -64,6 +64,15 @@ pub const PIPE_NAME: &str = r"\\.\pipe\keitora";
 ///   `FILE_CREATE_PIPE_INSTANCE`, so this right can't be narrowed; the first
 ///   instance's flag is what keeps the name from being taken over.
 ///
+/// **Accepted risk (M1):** because of that right, the interactive user can
+/// still create extra instances of the pipe, and so answer clients in the
+/// service's place or use up instances ([`MAX_INSTANCES`] bounds the latter).
+/// The fix is a narrower DACL (no `FILE_CREATE_PIPE_INSTANCE`) together with a
+/// `keitora-sys` wrapper that opens the pipe with an explicit access mask,
+/// because tokio's client always asks for `GENERIC_WRITE`. It is planned as a
+/// task of its own before the desktop client (T-3.1) and the native messaging
+/// host (T-4.1); see `docs/threat-model.md`.
+///
 /// No one else is granted anything: not Everyone, Authenticated Users,
 /// Users, Anonymous nor Network. Administrators get no ACE of their own; they
 /// can still take ownership, as they can of any object.
@@ -93,6 +102,14 @@ pub const MAX_PENDING_BYTES: usize = 2 * keitora_ipc::MAX_FRAME_LEN;
 /// client that finds none gets `ERROR_PIPE_BUSY` until a new one is made, so
 /// a few wait, and each is replaced as soon as a client takes it.
 const LISTENERS: usize = 4;
+
+/// The most instances of the pipe that may exist at once, set on every
+/// instance: the connections being served ([`MAX_CONNECTIONS`]), the
+/// [`LISTENERS`] waiting for a client, and up to [`LISTENERS`] more that exist
+/// for a moment because the next instance is made before a refused client's
+/// is dropped. Anything beyond that is refused by Windows, so the count
+/// can't grow without bound.
+const MAX_INSTANCES: usize = MAX_CONNECTIONS + 2 * LISTENERS;
 
 /// Bytes read from a pipe at a time.
 const READ_CHUNK: usize = 64 * 1024;
@@ -403,6 +420,7 @@ fn create_instance(
         .access_inbound(true)
         .access_outbound(true)
         .reject_remote_clients(true)
+        .max_instances(MAX_INSTANCES)
         .in_buffer_size(PIPE_BUFFER)
         .out_buffer_size(PIPE_BUFFER);
     create_server(&options, name, security)
@@ -705,6 +723,11 @@ mod tests {
         drop(frames);
         assert!(!outbox.push(frame(10)));
         assert_eq!(outbox.pending.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_instance_limit_covers_connections_and_listeners() {
+        assert_eq!(MAX_INSTANCES, 72);
     }
 
     #[test]
