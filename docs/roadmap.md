@@ -147,7 +147,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
 - [ ] **T-4.2** Extension service worker: connects to the host, receives the active blocklist, applies dynamic `declarativeNetRequest` rules (redirect to block page).
   - Depends on: T-0.11, T-4.1
 - [ ] **T-4.3** Path rules and exceptions in the extension, validated against the shared fixture from T-1.4.
-- [ ] **T-4.4** Block page: site, remaining time; no skip control in strict mode; localized.
+- [~] **T-4.4** Block page: site, remaining time; no skip control in strict mode; localized.
 - [ ] **T-4.5** Reload already-open tabs that match when a session starts.
 - [ ] **T-4.6** Extension ⇄ service heartbeat: a supported browser without an active extension during a session is treated as a blocked app.
 - [ ] **T-4.7** Unsupported browsers are blocked as apps during focus.
