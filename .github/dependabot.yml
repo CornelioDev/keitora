@@ -25,6 +25,14 @@ updates:
       # exist at runtime, so it moves by hand, together with that version.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # `@unovis/vue` 1.8.0 emits directory imports of `@unovis/ts` subpaths
+      # without `/index.js` (f5/unovis#876), which Node's ESM resolver
+      # rejects, so importing the `chart` component fails under Vitest. Both
+      # packages must move together, so both wait for a fixed 1.8.x.
+      - dependency-name: "@unovis/ts"
+        versions: ["1.8.x"]
+      - dependency-name: "@unovis/vue"
+        versions: ["1.8.x"]
 
   - package-ecosystem: github-actions
     directory: /
