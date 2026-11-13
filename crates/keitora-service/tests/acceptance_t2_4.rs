@@ -12,6 +12,8 @@
 //! - C2 The pipe has an explicit DACL: only `SYSTEM` and the interactive user
 //!   (or the user who runs the service in `--console` mode) may be granted
 //!   access; no Everyone, Authenticated Users, Users, Anonymous or Network.
+//!   Which rights each of them gets is issue #133's, in
+//!   `acceptance_t2_4_dacl.rs`.
 //! - C3 Remote clients are rejected (`PIPE_REJECT_REMOTE_CLIENTS`). A real
 //!   remote client can't be made in a test, so this is NOT covered here and
 //!   is left to the security review (see the report of this task).
@@ -52,6 +54,17 @@
 //! parallel. The tests need `keitora-ipc` as a dependency of
 //! `keitora-service` and `tokio` (features `rt`, `net`, `io-util`, `time`)
 //! as a dev-dependency or dependency, to write the test client.
+//!
+//! The test client opens the pipe with
+//! `keitora_sys::named_pipe::open_client(name, CLIENT_ACCESS)` instead of
+//! tokio's `ClientOptions`, so that the whole suite runs over the client path
+//! the product uses once issue #133 has narrowed the pipe's DACL: tokio asks
+//! for `GENERIC_READ | GENERIC_WRITE`, which is more than that DACL grants the
+//! interactive user. This is the only change to this file after T-2.4 was
+//! approved, and the maintainer approved it in writing on 2026-11-13
+//! (`docs/workflow.md`, "Acceptance tests are protected"). The wrapper, the
+//! narrow mask and what Windows does and doesn't enforce on a client open are
+//! in `acceptance_t2_4_dacl.rs`.
 //!
 //! Not testable without a numeric limit the docs don't give: the rate limit
 //! per connection (architecture.md) and the cap on connections (ADR-0014). The
@@ -107,8 +120,9 @@ use keitora_ipc::{
     PageRequest, Phase, Request, Response, SessionState, decode, encode,
 };
 use keitora_service::pipe::{PIPE_NAME, PipeServer, RequestHandler};
+use keitora_sys::named_pipe::{CLIENT_ACCESS, open_client};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use tokio::net::windows::named_pipe::NamedPipeClient;
 
 const WAIT: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_millis(600);
@@ -234,7 +248,7 @@ impl Client {
     async fn connect(name: &str) -> Client {
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(name) {
+            match open_client(name, CLIENT_ACCESS) {
                 Ok(pipe) => {
                     return Client {
                         pipe,
@@ -1100,7 +1114,7 @@ fn shutdown_closes_connections_and_removes_the_pipe() {
         );
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(&name) {
+            match open_client(&name, CLIENT_ACCESS) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
                 Ok(_) | Err(_) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1119,7 +1133,7 @@ fn dropping_the_server_stops_it() {
     run(async {
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(&name) {
+            match open_client(&name, CLIENT_ACCESS) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
                 Ok(_) | Err(_) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
