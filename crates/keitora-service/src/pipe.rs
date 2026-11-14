@@ -66,9 +66,12 @@ pub const PIPE_NAME: &str = r"\\.\pipe\keitora";
 ///   which on a pipe is `FILE_CREATE_PIPE_INSTANCE`, the right to serve the
 ///   pipe's name;
 /// - `service_sid`, when it isn't `SYSTEM`'s: full access, so the service can
-///   create the instances it serves clients on. That account is the pipe's
-///   owner, and an owner has `READ_CONTROL` and `WRITE_DAC` on it whatever the
-///   DACL says, so a narrower ACE here would take nothing away from it.
+///   create the instances it serves clients on. It is an account of the
+///   developer under `--console`, and a narrower ACE wouldn't protect the
+///   pipe from it: what matters is the right to create instances, which the
+///   service needs, and as the usual owner of the pipe (the default owner of
+///   a non-elevated user's token is the user) it has `READ_CONTROL` and
+///   `WRITE_DAC` whatever the DACL says.
 ///
 /// No one else is granted anything: not Everyone, Authenticated Users, Users,
 /// Anonymous nor Network. Administrators get no ACE of their own; they can
@@ -91,6 +94,11 @@ pub const PIPE_NAME: &str = r"\\.\pipe\keitora";
 /// isn't a SID in that text form is left out of the DACL instead of being
 /// pasted into it, which makes the service fail to start rather than widen the
 /// DACL.
+///
+/// The descriptor sets no owner (`O:`), so the pipe's owner is the default
+/// owner of the service's token. Naming one would fail for a process that
+/// may not assign it: an unprivileged process can't make `SYSTEM` the owner
+/// (`ERROR_INVALID_OWNER`).
 #[must_use]
 pub fn pipe_sddl(service_sid: &str) -> String {
     let mut sddl = format!("D:P(A;;FA;;;SY)(A;;0x{CLIENT_ACCESS:x};;;IU)");
@@ -820,7 +828,7 @@ mod tests {
             assert!(!is_sid(text), "{text} must not be taken for a SID");
             assert_eq!(
                 pipe_sddl(text),
-                pipe_sddl(SYSTEM_SID),
+                "D:P(A;;FA;;;SY)(A;;0x12019b;;;IU)",
                 "{text} must not add an ACE"
             );
         }
