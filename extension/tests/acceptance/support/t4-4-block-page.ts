@@ -35,6 +35,8 @@
 // MV3 service worker sleeps.
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { vi } from "vitest";
 
@@ -258,9 +260,12 @@ export class ChromeFake {
   }
 }
 
-const PAGE_HTML = new URL(
+// A path, not `new URL("<relative>", import.meta.url)`: under jsdom, Vitest
+// transforms modules in Vite's client environment, whose asset plugin rewrites
+// that expression into a dev-server URL that `readFileSync` cannot open.
+const PAGE_HTML = join(
+  dirname(fileURLToPath(import.meta.url)),
   "../../../src/block-page/index.html",
-  import.meta.url,
 );
 
 /** The page's markup, as it ships. */

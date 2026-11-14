@@ -23,6 +23,8 @@
 //      a_message_with_substitutions_declares_them_in_both_locales
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,12 +48,17 @@ interface LocaleMessage {
 }
 type LocaleMessages = Record<string, LocaleMessage>;
 
+// A path, not `new URL(`<relative>`, import.meta.url)`: under jsdom, Vitest
+// transforms modules in Vite's client environment, whose asset plugin rewrites
+// that expression into a glob of dev-server URLs.
+const localesDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../src/_locales",
+);
+
 function readMessages(locale: string): LocaleMessages {
   return JSON.parse(
-    readFileSync(
-      new URL(`../../src/_locales/${locale}/messages.json`, import.meta.url),
-      "utf-8",
-    ),
+    readFileSync(join(localesDir, locale, "messages.json"), "utf-8"),
   ) as LocaleMessages;
 }
 
