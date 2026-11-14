@@ -1,5 +1,19 @@
 {
   "app": {
     "name": "Keitora"
+  },
+  "nav": {
+    "label": "Principal"
+  },
+  "screens": {
+    "timer": "Temporizador",
+    "blocklists": "Listas de bloqueo",
+    "history": "Historial",
+    "settings": "Ajustes"
+  },
+  "window": {
+    "minimize": "Minimizar",
+    "toggleMaximize": "Maximizar o restaurar",
+    "close": "Cerrar"
   }
 }
