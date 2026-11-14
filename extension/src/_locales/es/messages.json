@@ -6,5 +6,79 @@
   "extensionDescription": {
     "message": "Bloquea los sitios web que distraen durante tus sesiones de concentración de Keitora.",
     "description": "Description of the extension, shown in the browser's extension list. At most 132 characters."
+  },
+  "blockPageTitle": {
+    "message": "Sitio bloqueado — Keitora",
+    "description": "Title of the browser tab that shows the block page."
+  },
+  "blockPageHeading": {
+    "message": "$SITE$ está bloqueado",
+    "description": "Main heading of the block page, naming the blocked site.",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "youtube.com"
+      }
+    }
+  },
+  "blockPageHeadingUnknownSite": {
+    "message": "Este sitio está bloqueado",
+    "description": "Main heading of the block page when the blocked address cannot be named, for example when it is not a web address."
+  },
+  "blockPageExplanation": {
+    "message": "Estás en una sesión de Keitora. Este sitio vuelve a estar disponible cuando la sesión termina.",
+    "description": "Sentence under the heading of the block page explaining why the site is blocked."
+  },
+  "blockPageRemaining": {
+    "message": "restantes",
+    "description": "Label next to the countdown on the block page, as in '14:32 remaining'."
+  },
+  "blockPagePhaseFocus": {
+    "message": "Enfoque",
+    "description": "Name of the focus phase, shown next to the countdown on the block page."
+  },
+  "blockPagePhaseShortBreak": {
+    "message": "Descanso corto",
+    "description": "Name of the short break phase, shown next to the countdown on the block page."
+  },
+  "blockPagePhaseLongBreak": {
+    "message": "Descanso largo",
+    "description": "Name of the long break phase, shown next to the countdown on the block page."
+  },
+  "blockPageCycle": {
+    "message": "ciclo $CYCLE$ de $CYCLES$",
+    "description": "Which cycle of the session is running, shown next to the countdown on the block page.",
+    "placeholders": {
+      "cycle": {
+        "content": "$1",
+        "example": "2"
+      },
+      "cycles": {
+        "content": "$2",
+        "example": "4"
+      }
+    }
+  },
+  "blockPageStrictUntil": {
+    "message": "Modo estricto: no se puede desbloquear hasta las $TIME$",
+    "description": "Notice on the block page saying that a strict session cannot be unblocked before the time it ends.",
+    "placeholders": {
+      "time": {
+        "content": "$1",
+        "example": "14:10"
+      }
+    }
+  },
+  "blockPageStrictLocked": {
+    "message": "Modo estricto: no se puede desbloquear hasta que termine la sesión",
+    "description": "Notice on the block page for a strict session whose end time is unknown."
+  },
+  "blockPageNoData": {
+    "message": "Keitora no puede leer la sesión ahora mismo. El sitio sigue bloqueado.",
+    "description": "Shown on the block page instead of the countdown when there is no session to show, or the extension cannot reach Keitora."
+  },
+  "blockPageFooter": {
+    "message": "Bloqueado por Keitora",
+    "description": "Footer of the block page, saying which program blocked the site."
   }
 }

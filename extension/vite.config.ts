@@ -21,6 +21,19 @@ function localeFiles(): string[] {
 }
 
 /**
+ * The block page's markup and stylesheets, relative to src/. They are plain
+ * files that need no bundling, and they keep their paths in dist/, so that the
+ * page's own `./block-page.js` and `./block-page.css` resolve there as they do
+ * in src/. The manifest names `block-page/index.html` the same way.
+ */
+function blockPageFiles(): string[] {
+  const names = readdirSync(new URL("block-page/", srcDir)).filter(
+    (name) => name === "index.html" || name.endsWith(".css"),
+  );
+  return names.map((name) => `block-page/${name}`);
+}
+
+/**
  * Writes the manifest into the build output, also at the root, with the version
  * from package.json, which release-please keeps up to date. The `version` in
  * src/manifest.json is only there for the unit tests and never ships.
@@ -49,7 +62,7 @@ function copyStaticFiles(): Plugin {
         source: manifestWithProjectVersion(),
       });
 
-      for (const fileName of localeFiles()) {
+      for (const fileName of [...localeFiles(), ...blockPageFiles()]) {
         const path = new URL(fileName, srcDir);
         this.addWatchFile(fileURLToPath(path));
         this.emitFile({
@@ -73,9 +86,13 @@ export default defineConfig({
   build: {
     rolldownOptions: {
       // An extension has no index.html: each entry point is a script that
-      // the manifest names. Add new ones (such as the block page) here.
+      // the manifest or an extension page names. Add new ones here. The key
+      // is the path the entry gets in dist/, without the extension.
       input: {
         "service-worker": fileURLToPath(new URL("service-worker.ts", srcDir)),
+        "block-page/block-page": fileURLToPath(
+          new URL("block-page/block-page.ts", srcDir),
+        ),
       },
       output: {
         // The manifest needs a fixed file name, so no content hash.

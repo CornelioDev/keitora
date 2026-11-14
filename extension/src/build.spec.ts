@@ -50,6 +50,9 @@ describe("the build output", () => {
     expect(files).toEqual([
       "_locales/en/messages.json",
       "_locales/es/messages.json",
+      "block-page/block-page.css",
+      "block-page/block-page.js",
+      "block-page/index.html",
       "manifest.json",
       "service-worker.js",
     ]);

@@ -1,7 +1,12 @@
 {
-  // Same rules as the extension, plus the tests. The code they import from
-  // src/ is checked here too, against the test's types.
-  "extends": "./tsconfig.app.json",
+  // Same rules as the extension's pages, plus the tests. The code they import
+  // from src/ is checked here too, against the test's types.
+  //
+  // It extends the page's project, not the service worker's: the tests of the
+  // block page run in jsdom and use the DOM, which cannot share a program
+  // with the WebWorker's types. No test loads the service worker today; one
+  // that did would need a project of its own.
+  "extends": "./tsconfig.page.json",
   "compilerOptions": {
     // Tests run in Node.js (Vitest) and read the source and build files.
     "types": ["node"],

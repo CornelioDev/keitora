@@ -1,13 +1,17 @@
 {
-  // Solution file: `tsc --build` (`pnpm typecheck`) checks the three projects
+  // Solution file: `tsc --build` (`pnpm typecheck`) checks the four projects
   // below. Each one sees only the types its code runs with:
-  // - tsconfig.app.json: the extension in src/, which runs in the browser.
+  // - tsconfig.app.json: the service worker in src/, which runs in a worker.
+  // - tsconfig.page.json: the extension's pages in src/block-page/, which run
+  //   in a browser tab. The DOM's types and the WebWorker's declare the same
+  //   names, so a page cannot share a program with the service worker.
   // - tsconfig.test.json: unit tests next to the code and tests/, which run
-  //   in Vitest under Node.js.
+  //   in Vitest under Node.js, with the DOM the page's tests need.
   // - tsconfig.node.json: the tool configs, which run in Node.js.
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.page.json" },
     { "path": "./tsconfig.test.json" },
     { "path": "./tsconfig.node.json" }
   ]

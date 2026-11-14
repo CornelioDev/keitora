@@ -1,0 +1,165 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
+
+/* Styles of the block page. The extension ships plain CSS with the design
+   tokens of docs/ui-stack.md, so that the page looks like the desktop app
+   without pulling Tailwind into the extension. Nothing is loaded from the
+   network: the page uses the fonts the system already has. */
+
+:root {
+  /* Light theme (docs/ui-stack.md, "Design tokens"). */
+  --background: #fafaf9;
+  --card: #ffffff;
+  --foreground: #18181b;
+  --muted-foreground: #71717a;
+  --primary: #e5484d;
+  --strict: #f5a524;
+  --border: #e4e4e7;
+  --radius: 0.75rem;
+
+  /* Tells the browser which theme its own widgets, such as the scrollbar,
+     should follow. */
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0c0c0e;
+    --card: #16161a;
+    --foreground: #f4f4f5;
+    --muted-foreground: #a1a1aa;
+    --primary: #f2555a;
+    --strict: #f7b955;
+    --border: #27272a;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  padding: 3rem 1.5rem;
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  max-width: 34rem;
+}
+
+.badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: calc(var(--radius) + 0.25rem);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+}
+
+.badge-icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.explanation {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.session {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 1.5rem 2.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.clock {
+  margin: 0;
+  font-size: 3.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+}
+
+.session-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+/* The separators between "remaining", the phase and the cycle are decoration,
+   so they live here and not in the message files. */
+.session-line span + span::before {
+  content: "\00b7";
+  margin-inline-end: 0.5rem;
+}
+
+.notice {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.strict {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.625rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--strict) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--strict) 14%, transparent);
+  color: var(--strict);
+  font-size: 0.9375rem;
+}
+
+.strict-icon {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.footer {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}

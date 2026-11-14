@@ -1,0 +1,28 @@
+{
+  // The extension's pages, which run in a browser tab and use the DOM.
+  // `lib` is the only difference from tsconfig.app.json: the DOM's types and
+  // the WebWorker's declare the same names, so they cannot share a program.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // TypeScript 6 loads no `@types/*` packages unless they are listed. The
+    // page has none: it talks to `chrome` through types it declares itself.
+    "types": [],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "noEmit": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.page.tsbuildinfo",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/block-page/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts"]
+}
