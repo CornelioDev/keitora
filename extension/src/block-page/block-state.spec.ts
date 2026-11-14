@@ -5,13 +5,19 @@ import { describe, expect, it } from "vitest";
 import {
   BLOCK_STATE,
   type BlockState,
+  MAX_CYCLES,
+  MAX_HOST_LENGTH,
+  MAX_REMAINING_MS,
   blockedHost,
   formatClock,
   formatTimeOfDay,
+  isFromServiceWorker,
   isStateMessage,
   parseState,
   remainingAt,
 } from "./block-state";
+
+const EXTENSION_ID = "keitoraunittestsxxxxxxxxxxxxxxxx";
 
 /** A state as the service worker sends it, with the overrides a test needs. */
 function state(overrides: Partial<BlockState> = {}): BlockState {
@@ -32,13 +38,44 @@ describe("isStateMessage", () => {
     expect(isStateMessage({ type: BLOCK_STATE, state: null })).toBe(true);
   });
 
+  it("accepts a message that carries a state", () => {
+    expect(isStateMessage({ type: BLOCK_STATE, state: { phase: "x" } })).toBe(
+      true,
+    );
+  });
+
   it.each([
-    ["another type", { type: "keitora:something-else" }],
+    // The page's own request, which other pages of the extension also hear.
+    ["a request, which carries no state", { type: BLOCK_STATE }],
+    [
+      "a state inherited instead of carried",
+      Object.assign(Object.create({ state: null }) as object, {
+        type: BLOCK_STATE,
+      }),
+    ],
+    ["another type", { type: "keitora:something-else", state: null }],
     ["no type", { state: null }],
     ["a string", "keitora:block-state"],
     ["null", null],
   ])("rejects %s", (_name, message) => {
     expect(isStateMessage(message)).toBe(false);
+  });
+});
+
+describe("isFromServiceWorker", () => {
+  it("accepts the extension's own service worker, which has no tab", () => {
+    expect(isFromServiceWorker({ id: EXTENSION_ID }, EXTENSION_ID)).toBe(true);
+  });
+
+  it.each([
+    // Another block page, possibly in a frame of a hostile site.
+    ["a page of the extension in a tab", { id: EXTENSION_ID, tab: { id: 7 } }],
+    ["another extension", { id: "anotherextensionxxxxxxxxxxxxxxxx" }],
+    ["a sender with no id", { url: "https://evil.example/" }],
+    ["no sender", undefined],
+    ["a sender that is not an object", EXTENSION_ID],
+  ])("rejects %s", (_name, sender) => {
+    expect(isFromServiceWorker(sender, EXTENSION_ID)).toBe(false);
   });
 });
 
@@ -78,8 +115,38 @@ describe("parseState", () => {
     ["a strict flag that is not a boolean", { ...state(), strict: "yes" }],
     ["an end time that is not a number", { ...state(), strictEndsAt: "14:10" }],
     ["an end time of NaN", { ...state(), strictEndsAt: Number.NaN }],
+    // Right type, wrong range: the page shows none of these.
+    ["a cycle after the last one", { ...state(), cycle: 9, cycles: 4 }],
+    ["a negative cycle", { ...state(), cycle: -1 }],
+    ["a negative total of cycles", { ...state(), cycles: -4 }],
+    ["an absurd total of cycles", { ...state(), cycles: 1e300 }],
+    [
+      "more cycles than the page allows",
+      { ...state(), cycles: MAX_CYCLES + 1 },
+    ],
+    ["more than a day left", { ...state(), remainingMs: MAX_REMAINING_MS + 1 }],
+    ["an absurd time left", { ...state(), remainingMs: 1e300 }],
   ])("refuses %s", (_name, value) => {
     expect(parseState(value)).toBeNull();
+  });
+
+  it("accepts the last cycle of a session", () => {
+    expect(parseState(state({ cycle: 4, cycles: 4 }))?.cycle).toBe(4);
+  });
+
+  it("accepts the most cycles and the longest time it allows", () => {
+    const longest = state({
+      cycle: MAX_CYCLES,
+      cycles: MAX_CYCLES,
+      remainingMs: MAX_REMAINING_MS,
+    });
+
+    expect(parseState(longest)).toEqual(longest);
+  });
+
+  it("allows well above the engine's limits of 8 cycles and 120 minutes", () => {
+    expect(MAX_CYCLES).toBeGreaterThan(8);
+    expect(MAX_REMAINING_MS).toBeGreaterThan(120 * 60 * 1000);
   });
 });
 
@@ -114,6 +181,45 @@ describe("blockedHost", () => {
 
   it("names no site for markup in the parameter", () => {
     expect(blockedHost(`?url=<img src=x onerror="alert(1)">`)).toBeNull();
+  });
+
+  /** An address whose host is `length` characters long, in 63-character labels. */
+  function addressWithHost(length: number): string {
+    const labels: string[] = [];
+    let left = length;
+    while (left > 0) {
+      const size = Math.min(63, left === 64 ? 62 : left);
+      labels.push("a".repeat(size));
+      left -= size + 1;
+    }
+    const host = labels.join(".");
+    expect(host).toHaveLength(length);
+    return `?url=${encodeURIComponent(`https://${host}/watch`)}`;
+  }
+
+  it("names a site whose host is as long as DNS allows", () => {
+    const search = addressWithHost(MAX_HOST_LENGTH);
+
+    expect(blockedHost(search)).toHaveLength(MAX_HOST_LENGTH);
+  });
+
+  it("names no site for a host longer than DNS allows", () => {
+    expect(blockedHost(addressWithHost(MAX_HOST_LENGTH + 1))).toBeNull();
+  });
+
+  it("names no site for a host of thousands of characters", () => {
+    const search = `?url=https://${"a".repeat(5_000)}.example/`;
+
+    expect(blockedHost(search)).toBeNull();
+  });
+
+  it("does not count the port against the limit", () => {
+    const search = addressWithHost(MAX_HOST_LENGTH).replace(
+      "%2Fwatch",
+      "%3A8080%2Fwatch",
+    );
+
+    expect(blockedHost(search)).toHaveLength(MAX_HOST_LENGTH + ":8080".length);
   });
 });
 

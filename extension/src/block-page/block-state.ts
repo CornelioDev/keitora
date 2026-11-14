@@ -30,6 +30,23 @@ export interface BlockState {
   strictEndsAt: number | null;
 }
 
+/**
+ * The most cycles a state may claim. It is a sanity bound, well above what the
+ * engine allows (keitora-core's `MAX_CYCLES`, 8), so that the page never shows
+ * an absurd number, yet does not go blank if the engine allows a few more.
+ */
+export const MAX_CYCLES = 99;
+
+/**
+ * The longest a phase may claim to have left: a day. The engine's longest
+ * phase is 120 minutes (`MAX_FOCUS_MIN`); anything beyond a day is a broken
+ * state, not a long phase.
+ */
+export const MAX_REMAINING_MS = 24 * 60 * 60 * 1000;
+
+/** The longest host name DNS allows, which the URL parser does not enforce. */
+export const MAX_HOST_LENGTH = 253;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -43,21 +60,54 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function isCount(value: unknown): value is number {
-  return isFiniteNumber(value) && Number.isInteger(value) && value > 0;
+  return (
+    isFiniteNumber(value) &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_CYCLES
+  );
 }
 
-/** Whether a message, or an answer to the request, follows the contract. */
+/**
+ * Whether a message, or an answer to the request, carries a state. The page's
+ * own request, `{ type: "keitora:block-state" }`, has the same type but no
+ * `state`; Chrome delivers it to every other page of the extension too, so it
+ * must never count as a state. A real answer or push always has `state`, even
+ * when it is `null`.
+ */
 export function isStateMessage(
   message: unknown,
 ): message is { state: unknown } {
-  return isRecord(message) && message.type === BLOCK_STATE;
+  return (
+    isRecord(message) &&
+    message.type === BLOCK_STATE &&
+    Object.hasOwn(message, "state")
+  );
+}
+
+/**
+ * Whether a message comes from the extension's service worker, the only
+ * sender whose state the page believes. `extensionId` is
+ * `chrome.runtime.id`. A sender with a `tab` is a page of the extension open
+ * in a tab or in a frame, such as another block page, possibly framed by a
+ * hostile site; a sender with another `id` is another extension.
+ */
+export function isFromServiceWorker(
+  sender: unknown,
+  extensionId: string,
+): boolean {
+  return (
+    isRecord(sender) && sender.id === extensionId && sender.tab === undefined
+  );
 }
 
 /**
  * Reads a state, field by field, from a value the page did not produce.
  * Returns `null` for anything unexpected, including the `null` that means "no
  * active session": the page would rather say nothing than show a time it
- * cannot stand behind.
+ * cannot stand behind. Values of the right type but out of range, such as
+ * cycle 9 of 4 or a phase with years left, are unexpected too. A slightly
+ * negative remaining time is not: a state read as the phase ends reads as 0.
  */
 export function parseState(value: unknown): BlockState | null {
   if (!isRecord(value)) {
@@ -68,7 +118,13 @@ export function parseState(value: unknown): BlockState | null {
   if (!isPhase(phase) || !isCount(cycle) || !isCount(cycles)) {
     return null;
   }
+  if (cycle > cycles) {
+    return null;
+  }
   if (!isFiniteNumber(remainingMs) || !isFiniteNumber(asOf)) {
+    return null;
+  }
+  if (remainingMs > MAX_REMAINING_MS) {
     return null;
   }
   if (typeof strict !== "boolean") {
@@ -94,7 +150,9 @@ export function parseState(value: unknown): BlockState | null {
  * is none to show. Only `http` and `https` name a site: keitora-core blocks no
  * other scheme, and an address the page cannot parse says nothing about who
  * was blocked. Nothing but the host is ever shown, so that a blocked page
- * cannot have the block page repeat a path it chose.
+ * cannot have the block page repeat a path it chose, and a host longer than
+ * DNS allows names no site, so that a crafted address cannot push the rest of
+ * the page off the screen.
  *
  * @param search the query of the page's own address, `location.search`.
  */
@@ -112,7 +170,10 @@ export function blockedHost(search: string): string | null {
   if (address.protocol !== "http:" && address.protocol !== "https:") {
     return null;
   }
-  return address.host === "" ? null : address.host;
+  if (address.hostname === "" || address.hostname.length > MAX_HOST_LENGTH) {
+    return null;
+  }
+  return address.host;
 }
 
 /**

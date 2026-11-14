@@ -16,6 +16,13 @@
   --border: #e4e4e7;
   --radius: 0.75rem;
 
+  /* Text of the strict notice. On a light background --strict is too pale
+     for text (about 1.8:1; WCAG AA asks 4.5:1), so it only colours the
+     notice's border, tint and icon, and the text is dark (docs/ui-stack.md:
+     text on --strict uses dark text). block-page.contrast.spec.ts checks the
+     ratio in both themes. */
+  --strict-foreground: var(--foreground);
+
   /* Tells the browser which theme its own widgets, such as the scrollbar,
      should follow. */
   color-scheme: light dark;
@@ -30,6 +37,8 @@
     --primary: #f2555a;
     --strict: #f7b955;
     --border: #27272a;
+    /* On a dark background the strict colour reads well as text. */
+    --strict-foreground: var(--strict);
   }
 }
 
@@ -149,12 +158,13 @@ h1 {
   border: 1px solid color-mix(in srgb, var(--strict) 45%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--strict) 14%, transparent);
-  color: var(--strict);
+  color: var(--strict-foreground);
   font-size: 0.9375rem;
 }
 
 .strict-icon {
   flex: none;
+  color: var(--strict);
   width: 1.125rem;
   height: 1.125rem;
 }

@@ -26,8 +26,8 @@
     "description": "Main heading of the block page when the blocked address cannot be named, for example when it is not a web address."
   },
   "blockPageExplanation": {
-    "message": "Estás en una sesión de Keitora. Este sitio vuelve a estar disponible cuando la sesión termina.",
-    "description": "Sentence under the heading of the block page explaining why the site is blocked."
+    "message": "Este sitio está bloqueado durante tu sesión de Keitora.",
+    "description": "Sentence under the heading of the block page explaining why the site is blocked. It must stay true in every phase: a blocklist may lift the block during breaks or keep it, and the page does not know which, so it does not say when the site comes back."
   },
   "blockPageRemaining": {
     "message": "restantes",

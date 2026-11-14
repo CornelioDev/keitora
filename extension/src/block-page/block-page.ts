@@ -20,6 +20,7 @@ import {
   blockedHost,
   formatClock,
   formatTimeOfDay,
+  isFromServiceWorker,
   isStateMessage,
   parseState,
   remainingAt,
@@ -38,9 +39,11 @@ const PHASE_KEYS: Record<Phase, string> = {
 /** The `chrome` APIs the page uses, which is as little as it needs. */
 interface ChromeApi {
   runtime: {
+    /** The extension's own ID, which its service worker's messages carry. */
+    id: string;
     sendMessage(message: unknown): Promise<unknown>;
     onMessage: {
-      addListener(listener: (message: unknown) => void): void;
+      addListener(listener: (message: unknown, sender: unknown) => void): void;
     };
   };
   i18n: {
@@ -68,6 +71,7 @@ function chromeApi(): ChromeApi | null {
   }
   const { onMessage } = runtime;
   if (
+    typeof runtime.id !== "string" ||
     typeof runtime.sendMessage !== "function" ||
     !isRecord(onMessage) ||
     typeof onMessage.addListener !== "function" ||
@@ -110,14 +114,23 @@ class BlockPage {
     document.documentElement.lang = this.language;
     document.title = this.message("blockPageTitle");
 
-    this.api.runtime.onMessage.addListener((message: unknown) => {
-      if (!isStateMessage(message)) {
-        return;
-      }
-      this.answered = true;
-      this.state = parseState(message.state);
-      this.render();
-    });
+    // Chrome delivers a message from any page of the extension to every other
+    // one, so the block page hears the requests of other block pages, which a
+    // hostile site can open in a frame at will. Only a state from the service
+    // worker counts; anything else changes nothing, not even `answered`.
+    this.api.runtime.onMessage.addListener(
+      (message: unknown, sender: unknown) => {
+        if (
+          !isFromServiceWorker(sender, this.api.runtime.id) ||
+          !isStateMessage(message)
+        ) {
+          return;
+        }
+        this.answered = true;
+        this.state = parseState(message.state);
+        this.render();
+      },
+    );
 
     // Nothing is drawn until the first answer arrives: an empty page for a
     // moment is better than saying there is no session while the answer is
@@ -167,6 +180,7 @@ class BlockPage {
     fill("footer-text", this.message("blockPageFooter"));
 
     show("session", state !== null);
+    show("explanation", state !== null);
     show("no-data", state === null);
     fill("no-data", state === null ? this.message("blockPageNoData") : "");
     fill(
