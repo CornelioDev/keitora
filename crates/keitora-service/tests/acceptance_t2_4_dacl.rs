@@ -17,7 +17,9 @@
 //! - C2 Nobody else is granted anything: no Everyone (`WD`), Authenticated
 //!   Users (`AU`), Users (`BU`), Anonymous (`AN`) or Network (`NU`) ACE. Only
 //!   `SYSTEM`, the interactive user and the SID the service itself runs under
-//!   may appear.
+//!   may appear. Trustees are compared as full SIDs, because SDDL may write
+//!   the service's own account as an alias (`LA` for the built-in
+//!   Administrator that CI runs as).
 //! - C3 (M1) With the DACL of a service running as `SYSTEM`, a process of the
 //!   interactive user can **not** create another instance of the pipe name, so
 //!   it can't answer clients in the service's place.
@@ -68,7 +70,13 @@
 //!   puts out of scope. If these tests are run from an elevated prompt, C3,
 //!   C4 and C7 still expect the attempt to be denied, because taking
 //!   ownership is a deliberate act and not what `CreateNamedPipeW` or
-//!   `CreateFileW` do.
+//!   `CreateFileW` do. CI is such a case: it runs the tests as the machine's
+//!   built-in Administrator, elevated, so the hand-made pipes are owned by
+//!   Administrators (`O:BA`). Being the owner adds only `READ_CONTROL` and
+//!   `WRITE_DAC`, not `FILE_CREATE_PIPE_INSTANCE`, `DELETE` or
+//!   `FILE_DELETE_CHILD`, and the privileges that could add them (backup,
+//!   restore, take ownership) are disabled by default and need backup
+//!   semantics or an explicit request that these opens don't make.
 //! - The DACL of the pipe of a **really installed** service (owner `SYSTEM`):
 //!   the tests check `pipe_sddl` for that SID and the live pipe of a server
 //!   run by the interactive user, which is what a test host can start.
@@ -145,8 +153,26 @@ use keitora_sys::security::SecurityDescriptor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeClient, PipeMode, ServerOptions};
 
-/// `S-1-5-18`, the SID the service runs under once it is installed.
+/// `S-1-5-18`, the SID the service runs under once it is installed. SDDL
+/// writes it `SY`.
 const SYSTEM_SID: &str = "S-1-5-18";
+
+/// The interactive users, which SDDL writes `IU`.
+const INTERACTIVE_SID: &str = "S-1-5-4";
+
+/// Trustees that must get nothing, as full SIDs (the SDDL alias in brackets):
+/// Everyone (`WD`), Authenticated Users (`AU`), Users (`BU`), Anonymous
+/// (`AN`), Network (`NU`), Administrators (`BA`) and Write Restricted
+/// (`WR`).
+const FOREIGN_SIDS: [&str; 7] = [
+    "S-1-1-0",
+    "S-1-5-11",
+    "S-1-5-32-545",
+    "S-1-5-7",
+    "S-1-5-2",
+    "S-1-5-32-544",
+    "S-1-5-33",
+];
 
 /// `ERROR_ACCESS_DENIED`.
 const ACCESS_DENIED: i32 = 5;
@@ -258,18 +284,17 @@ fn current_user_sid() -> String {
         .to_owned()
 }
 
-/// The SDDL of a live pipe, read with PowerShell's `Get-Acl`.
-fn live_sddl(name: &str) -> String {
-    let script = format!("(Get-Acl -LiteralPath '{name}').Sddl");
+/// What Windows PowerShell prints for `script`, trimmed.
+fn powershell(script: &str) -> String {
     let output = Command::new("powershell")
         // A PSModulePath inherited from PowerShell 7 breaks module autoload in Windows PowerShell 5.1.
         .env_remove("PSModulePath")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .expect("powershell runs");
     assert!(
         output.status.success(),
-        "Get-Acl failed: {}",
+        "PowerShell failed on `{script}`: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout)
@@ -278,11 +303,61 @@ fn live_sddl(name: &str) -> String {
         .to_owned()
 }
 
-/// One access-allowed ACE: its rights and its trustee.
+/// The SDDL of a live pipe, read with PowerShell's `Get-Acl`.
+fn live_sddl(name: &str) -> String {
+    powershell(&format!("(Get-Acl -LiteralPath '{name}').Sddl"))
+}
+
+/// The full SID of each trustee, in order. SDDL writes some SIDs as two-letter
+/// aliases, not only well-known ones such as `SY` and `IU` but also accounts
+/// of this machine, such as `LA` for its built-in Administrator (the account
+/// CI runs the tests as) or `LG` for its Guest. So trustees are compared as
+/// full SIDs, which Windows resolves here: `SecurityIdentifier` reads both an
+/// alias and a full SID.
+fn full_sids(trustees: &[&str]) -> Vec<String> {
+    assert!(!trustees.is_empty(), "no trustees to resolve");
+    for trustee in trustees {
+        assert!(
+            !trustee.is_empty()
+                && trustee
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+            "unexpected trustee {trustee:?}"
+        );
+    }
+    let list: Vec<String> = trustees
+        .iter()
+        .map(|trustee| format!("'{trustee}'"))
+        .collect();
+    let script = format!(
+        "{} | ForEach-Object {{ ([System.Security.Principal.SecurityIdentifier]::new($_)).Value }}",
+        list.join(",")
+    );
+    let sids: Vec<String> = powershell(&script)
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(
+        sids.len(),
+        trustees.len(),
+        "every trustee of {trustees:?} resolves to one SID, got {sids:?}"
+    );
+    sids
+}
+
+/// The full SID of the user running the tests.
+fn current_user_full_sid() -> String {
+    full_sids(&[current_user_sid().as_str()])
+        .pop()
+        .expect("the user's SID")
+}
+
+/// One access-allowed ACE: its rights and its trustee, as a full SID.
 #[derive(Debug)]
 struct Ace {
     rights: u32,
-    trustee: String,
+    sid: String,
 }
 
 /// The bits an SDDL rights field stands for, whether it is hexadecimal
@@ -336,7 +411,8 @@ fn allowed_aces(sddl: &str) -> Vec<Ace> {
         dacl.starts_with('P'),
         "the DACL must be protected against inheritance (SDDL: {sddl})"
     );
-    let mut aces = Vec::new();
+    let mut rights = Vec::new();
+    let mut trustees = Vec::new();
     for ace in dacl.split('(').skip(1) {
         let ace = ace.trim_end_matches(')');
         let fields: Vec<&str> = ace.split(';').collect();
@@ -344,22 +420,24 @@ fn allowed_aces(sddl: &str) -> Vec<Ace> {
         if kind != "A" && kind != "OA" {
             continue;
         }
-        let rights = fields.get(2).copied().unwrap_or_default();
-        let trustee = fields.last().copied().unwrap_or_default();
-        aces.push(Ace {
-            rights: rights_mask(rights),
-            trustee: trustee.to_owned(),
-        });
+        rights.push(rights_mask(fields.get(2).copied().unwrap_or_default()));
+        trustees.push(fields.last().copied().unwrap_or_default());
     }
-    assert!(!aces.is_empty(), "the DACL is empty (SDDL: {sddl})");
-    aces
+    assert!(!trustees.is_empty(), "the DACL is empty (SDDL: {sddl})");
+    rights
+        .into_iter()
+        .zip(full_sids(&trustees))
+        .map(|(rights, sid)| Ace { rights, sid })
+        .collect()
 }
 
-/// Checks C1 on `sddl`: the interactive user is granted exactly
-/// `CLIENT_ACCESS` and nothing beyond it.
-fn assert_interactive_mask(sddl: &str) {
-    let aces = allowed_aces(sddl);
-    let interactive: Vec<&Ace> = aces.iter().filter(|ace| ace.trustee == "IU").collect();
+/// Checks C1 on `aces`, the allowed ACEs of `sddl`: the interactive user is
+/// granted exactly `CLIENT_ACCESS` and nothing beyond it.
+fn assert_interactive_mask(sddl: &str, aces: &[Ace]) {
+    let interactive: Vec<&Ace> = aces
+        .iter()
+        .filter(|ace| ace.sid == INTERACTIVE_SID)
+        .collect();
     assert_eq!(
         interactive.len(),
         1,
@@ -378,26 +456,24 @@ fn assert_interactive_mask(sddl: &str) {
     }
 }
 
-/// Checks C2 on `sddl`: only `SYSTEM`, the interactive user and the SID the
-/// service runs under are granted anything.
-fn assert_no_other_trustee(sddl: &str, service_sid: &str) {
-    let trustees: HashSet<String> = allowed_aces(sddl)
-        .into_iter()
-        .map(|ace| ace.trustee)
-        .collect();
-    let allowed = ["SY", "IU", SYSTEM_SID, service_sid];
+/// Checks C2 on `aces`, the allowed ACEs of `sddl`: only `SYSTEM`, the
+/// interactive user and the SID the service runs under (`service_sid`, a
+/// full SID) are granted anything.
+fn assert_no_other_trustee(sddl: &str, aces: &[Ace], service_sid: &str) {
+    let trustees: HashSet<&str> = aces.iter().map(|ace| ace.sid.as_str()).collect();
+    let allowed = [SYSTEM_SID, INTERACTIVE_SID, service_sid];
     for trustee in &trustees {
         assert!(
-            allowed.contains(&trustee.as_str()),
+            allowed.contains(trustee),
             "trustee {trustee} must not be granted access (SDDL: {sddl})"
         );
     }
     assert!(
-        trustees.contains("SY") || trustees.contains(SYSTEM_SID),
+        trustees.contains(SYSTEM_SID),
         "SYSTEM must be granted access (SDDL: {sddl})"
     );
     assert!(
-        trustees.contains("IU"),
+        trustees.contains(INTERACTIVE_SID),
         "the interactive user must be granted access (SDDL: {sddl})"
     );
 }
@@ -455,22 +531,23 @@ fn client_access_is_read_and_write_without_create_pipe_instance() {
 #[test]
 fn pipe_sddl_grants_the_interactive_user_exactly_the_client_mask() {
     // As the installed service runs, and as it runs with `--console`.
-    let user = current_user_sid();
+    let user = current_user_full_sid();
     for sid in [SYSTEM_SID, user.as_str()] {
         let sddl = pipe_sddl(sid);
-        assert_interactive_mask(&sddl);
+        assert_interactive_mask(&sddl, &allowed_aces(&sddl));
         SecurityDescriptor::from_sddl(&sddl).expect("Windows parses the pipe's SDDL");
     }
 }
 
 #[test]
 fn pipe_sddl_grants_nobody_but_system_the_user_and_the_service() {
-    let user = current_user_sid();
+    let user = current_user_full_sid();
     for sid in [SYSTEM_SID, user.as_str()] {
         let sddl = pipe_sddl(sid);
-        assert_no_other_trustee(&sddl, sid);
-        for ace in allowed_aces(&sddl) {
-            if ace.trustee == "SY" || ace.trustee == SYSTEM_SID {
+        let aces = allowed_aces(&sddl);
+        assert_no_other_trustee(&sddl, &aces, sid);
+        for ace in &aces {
+            if ace.sid == SYSTEM_SID {
                 assert_eq!(
                     ace.rights & FILE_ALL_ACCESS,
                     FILE_ALL_ACCESS,
@@ -485,7 +562,7 @@ fn pipe_sddl_grants_nobody_but_system_the_user_and_the_service() {
 fn the_live_pipe_grants_the_interactive_user_exactly_the_client_mask() {
     let (name, server) = start();
     let sddl = live_sddl(&name);
-    assert_interactive_mask(&sddl);
+    assert_interactive_mask(&sddl, &allowed_aces(&sddl));
     drop(server);
 }
 
@@ -493,10 +570,11 @@ fn the_live_pipe_grants_the_interactive_user_exactly_the_client_mask() {
 fn the_live_pipe_grants_nobody_but_system_the_user_and_the_service() {
     let (name, server) = start();
     let sddl = live_sddl(&name);
-    assert_no_other_trustee(&sddl, &current_user_sid());
-    for denied in ["WD", "AU", "BU", "AN", "NU", "BA", "WR"] {
+    let aces = allowed_aces(&sddl);
+    assert_no_other_trustee(&sddl, &aces, &current_user_full_sid());
+    for denied in FOREIGN_SIDS {
         assert!(
-            !allowed_aces(&sddl).iter().any(|ace| ace.trustee == denied),
+            !aces.iter().any(|ace| ace.sid == denied),
             "{denied} must not be granted access (SDDL: {sddl})"
         );
     }
