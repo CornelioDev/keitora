@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. It grants no permissions while the window is empty; each feature adds only the permissions it needs.",
+  "description": "Capability for the main window. It grants only what the custom title bar needs: the window has no native decorations, so the app draws its own controls. Each feature adds only the permissions it needs.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": [
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize"
+  ]
 }
