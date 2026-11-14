@@ -20,7 +20,7 @@ resolver = "3"
 # Set by release-please, along with Cargo.lock (release-please-config.json); don't
 # edit it by hand. Nothing is released yet, and the first release is v0.1.0-beta.1;
 # starting at 0.1.0 would make it look like a downgrade.
-version = "0.0.0"
+version = "0.1.0-beta.1"
 edition = "2024"
 # Minimum supported Rust version: the minor version of the toolchain pinned in
 # rust-toolchain.toml, which is the only version CI tests. Bump both together.
