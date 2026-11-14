@@ -25,5 +25,12 @@ windows-sys = { workspace = true, features = [
 # descriptor is an `unsafe` tokio call, so it lives here (ADR-0012).
 tokio = { workspace = true, features = ["net"] }
 
+[dev-dependencies]
+# The unit tests of `named_pipe` connect a client to a server and check the
+# impersonation level the server gets, which needs a runtime, async reads and
+# writes, and `ImpersonateNamedPipeClient` (test-only, not a wrapper here).
+tokio = { workspace = true, features = ["io-util", "net", "rt"] }
+windows-sys = { workspace = true, features = ["Win32_System_Pipes"] }
+
 [lints]
 workspace = true
