@@ -22,7 +22,10 @@ import { expect, vi } from "vitest";
 import type { Component } from "vue";
 import type { Router } from "vue-router";
 
-import App from "@/App.vue";
+// src/App.vue is loaded in mountShell(), not here: the specs' mocks of
+// `@tauri-apps/api/window` take `appWindow` from this module, and loading the
+// app while this module is still being evaluated would hand them an
+// `appWindow` that does not exist yet.
 import { createAppI18n, type Locale } from "@/i18n";
 
 /** The app's vue-i18n instance, as src/main.ts creates it. */
@@ -87,16 +90,18 @@ export interface RouterModule {
   createAppRouter: () => Router;
 }
 
+// import.meta.glob resolves patterns from this file, which sits in
+// tests/acceptance/support/, three levels below apps/desktop/.
 const routerModules = import.meta.glob<RouterModule>(
-  "../../src/router/index.ts",
+  "../../../src/router/index.ts",
 );
 const pageModules = import.meta.glob<{ default: Component }>(
-  "../../src/pages/*.vue",
+  "../../../src/pages/*.vue",
 );
 
 /** The app's router module (src/router/index.ts). */
 export async function loadRouterModule(): Promise<RouterModule> {
-  const load = routerModules["../../src/router/index.ts"];
+  const load = routerModules["../../../src/router/index.ts"];
   expect(
     load,
     "src/router/index.ts should exist (docs/ui-stack.md, 'Frontend layout')",
@@ -111,7 +116,7 @@ export async function loadRouterModule(): Promise<RouterModule> {
 
 /** The page component of a screen (src/pages/<Name>Page.vue). */
 export async function loadPage(item: NavItem): Promise<Component> {
-  const load = pageModules[`../../src/pages/${item.page}`];
+  const load = pageModules[`../../../src/pages/${item.page}`];
   expect(
     load,
     `src/pages/${item.page} should exist (docs/ui-stack.md, 'Frontend layout')`,
@@ -296,10 +301,13 @@ export async function mountShell(options: ShellOptions = {}): Promise<Shell> {
 
   const { createAppRouter } = await loadRouterModule();
   const router = createAppRouter();
+  // A test that starts elsewhere navigates first. Otherwise the router makes
+  // its first navigation when it is installed on the app, as it does when
+  // src/main.ts starts the app, so the harness does not require
+  // createAppRouter() to navigate on its own.
   if (options.path !== undefined) {
     await router.push(options.path);
   }
-  await router.isReady();
 
   const i18n = createAppI18n(options.locale ?? "en");
   // No retries: a failing request must show at once, not after a wait.
@@ -307,6 +315,7 @@ export async function mountShell(options: ShellOptions = {}): Promise<Shell> {
     defaultOptions: { queries: { retry: false } },
   });
 
+  const { default: App } = await import("@/App.vue");
   const host = document.createElement("div");
   document.body.appendChild(host);
   const wrapper = mount(App, {
@@ -316,6 +325,7 @@ export async function mountShell(options: ShellOptions = {}): Promise<Shell> {
     },
   });
   mounted = wrapper;
+  await router.isReady();
   await flushPromises();
 
   return { wrapper, host, router, i18n };
