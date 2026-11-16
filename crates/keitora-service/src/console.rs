@@ -37,9 +37,10 @@ pub fn run(data_dir: Option<PathBuf>, dll_search_restricted: io::Result<()>) -> 
         return ExitCode::FAILURE;
     }
 
-    match data_dir.map_or_else(default_data_dir, Ok) {
-        Ok(data_dir) => logging::init(&logs_dir(&data_dir)),
-        Err(error) => logging::init_without_files(&error),
+    let data_dir = data_dir.map_or_else(default_data_dir, Ok);
+    match &data_dir {
+        Ok(data_dir) => logging::init(&logs_dir(data_dir)),
+        Err(error) => logging::init_without_files(error),
     }
     tracing::info!(
         "Keitora service {} starting in console mode",
@@ -49,7 +50,7 @@ pub fn run(data_dir: Option<PathBuf>, dll_search_restricted: io::Result<()>) -> 
     let (stop, stop_requests) = mpsc::channel();
     stop_when_stdin_closes(stop.clone());
     stop_on_stop_keys(stop);
-    runtime::run(&stop_requests);
+    runtime::run(&stop_requests, data_dir.ok().as_deref());
 
     tracing::info!("stopped");
     ExitCode::SUCCESS
