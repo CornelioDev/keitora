@@ -58,8 +58,10 @@ pub enum StoreError {
         what: &'static str,
     },
     /// [`Store::record_session`](super::Store::record_session) refused a
-    /// record with an invalid field; nothing was stored.
-    #[error("invalid {what} in the session record")]
+    /// record with an invalid field, or
+    /// [`Store::save_bound_snapshot`](super::Store::save_bound_snapshot) an
+    /// invalid blocklist id; nothing was stored.
+    #[error("invalid {what} in the session record or snapshot")]
     InvalidRecord {
         /// The field: `"blocklist id"` or `"lock"`.
         what: &'static str,
