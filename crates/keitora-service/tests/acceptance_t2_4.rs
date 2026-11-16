@@ -12,6 +12,8 @@
 //! - C2 The pipe has an explicit DACL: only `SYSTEM` and the interactive user
 //!   (or the user who runs the service in `--console` mode) may be granted
 //!   access; no Everyone, Authenticated Users, Users, Anonymous or Network.
+//!   Which rights each of them gets is issue #133's, in
+//!   `acceptance_t2_4_dacl.rs`.
 //! - C3 Remote clients are rejected (`PIPE_REJECT_REMOTE_CLIENTS`). A real
 //!   remote client can't be made in a test, so this is NOT covered here and
 //!   is left to the security review (see the report of this task).
@@ -52,6 +54,17 @@
 //! parallel. The tests need `keitora-ipc` as a dependency of
 //! `keitora-service` and `tokio` (features `rt`, `net`, `io-util`, `time`)
 //! as a dev-dependency or dependency, to write the test client.
+//!
+//! The test client opens the pipe with
+//! `keitora_sys::named_pipe::open_client(name, CLIENT_ACCESS)` instead of
+//! tokio's `ClientOptions`, so that the whole suite runs over the client path
+//! the product uses once issue #133 has narrowed the pipe's DACL: tokio asks
+//! for `GENERIC_READ | GENERIC_WRITE`, which is more than that DACL grants the
+//! interactive user. This is the only change to this file after T-2.4 was
+//! approved, and the maintainer approved it in writing on 2026-11-13
+//! (`docs/workflow.md`, "Acceptance tests are protected"). The wrapper, the
+//! narrow mask and what Windows does and doesn't enforce on a client open are
+//! in `acceptance_t2_4_dacl.rs`.
 //!
 //! Not testable without a numeric limit the docs don't give: the rate limit
 //! per connection (architecture.md) and the cap on connections (ADR-0014). The
@@ -107,8 +120,9 @@ use keitora_ipc::{
     PageRequest, Phase, Request, Response, SessionState, decode, encode,
 };
 use keitora_service::pipe::{PIPE_NAME, PipeServer, RequestHandler};
+use keitora_sys::named_pipe::{CLIENT_ACCESS, open_client};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use tokio::net::windows::named_pipe::NamedPipeClient;
 
 const WAIT: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_millis(600);
@@ -234,7 +248,7 @@ impl Client {
     async fn connect(name: &str) -> Client {
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(name) {
+            match open_client(name, CLIENT_ACCESS) {
                 Ok(pipe) => {
                     return Client {
                         pipe,
@@ -378,18 +392,17 @@ fn default_pipe_name_is_keitora() {
     assert_eq!(PIPE_NAME, r"\\.\pipe\keitora");
 }
 
-/// The SDDL of the pipe, read with PowerShell's `Get-Acl`.
-fn pipe_sddl(name: &str) -> String {
-    let script = format!("(Get-Acl -LiteralPath '{name}').Sddl");
+/// What Windows PowerShell prints for `script`, trimmed.
+fn powershell(script: &str) -> String {
     let output = Command::new("powershell")
         // A PSModulePath inherited from PowerShell 7 breaks module autoload in Windows PowerShell 5.1.
         .env_remove("PSModulePath")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .expect("powershell runs");
     assert!(
         output.status.success(),
-        "Get-Acl failed: {}",
+        "PowerShell failed on `{script}`: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout)
@@ -397,6 +410,55 @@ fn pipe_sddl(name: &str) -> String {
         .trim()
         .to_owned()
 }
+
+/// The SDDL of the pipe, read with PowerShell's `Get-Acl`.
+fn pipe_sddl(name: &str) -> String {
+    powershell(&format!("(Get-Acl -LiteralPath '{name}').Sddl"))
+}
+
+/// The full SID of each trustee, in order. SDDL writes some SIDs as two-letter
+/// aliases, not only well-known ones such as `SY` and `IU` but also accounts
+/// of this machine, such as `LA` for its built-in Administrator (the account
+/// CI runs the tests as) or `LG` for its Guest. So trustees are compared as
+/// full SIDs, which Windows resolves here: `SecurityIdentifier` reads both an
+/// alias and a full SID.
+fn full_sids(trustees: &[&str]) -> Vec<String> {
+    assert!(!trustees.is_empty(), "no trustees to resolve");
+    for trustee in trustees {
+        assert!(
+            !trustee.is_empty()
+                && trustee
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+            "unexpected trustee {trustee:?}"
+        );
+    }
+    let list: Vec<String> = trustees
+        .iter()
+        .map(|trustee| format!("'{trustee}'"))
+        .collect();
+    let script = format!(
+        "{} | ForEach-Object {{ ([System.Security.Principal.SecurityIdentifier]::new($_)).Value }}",
+        list.join(",")
+    );
+    let sids: Vec<String> = powershell(&script)
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(
+        sids.len(),
+        trustees.len(),
+        "every trustee of {trustees:?} resolves to one SID, got {sids:?}"
+    );
+    sids
+}
+
+/// `SYSTEM`, which SDDL writes `SY`.
+const SYSTEM_SID: &str = "S-1-5-18";
+
+/// The interactive users, which SDDL writes `IU`.
+const INTERACTIVE_SID: &str = "S-1-5-4";
 
 fn current_user_sid() -> String {
     let output = Command::new("whoami")
@@ -427,27 +489,36 @@ fn pipe_dacl_grants_only_system_and_the_interactive_user() {
         .collect();
     assert!(!aces.is_empty(), "the DACL is empty (SDDL: {sddl})");
 
-    let user = current_user_sid();
-    let mut allowed = HashSet::new();
+    let mut trustees = Vec::new();
     for ace in &aces {
         let fields: Vec<&str> = ace.split(';').collect();
         let kind = fields.first().copied().unwrap_or_default();
         let trustee = fields.last().copied().unwrap_or_default();
         if kind == "A" || kind == "OA" {
-            allowed.insert(trustee.to_owned());
+            trustees.push(trustee);
         }
     }
     assert!(
-        allowed.contains("SY"),
+        !trustees.is_empty(),
+        "the DACL grants nothing (SDDL: {sddl})"
+    );
+    // Compared as full SIDs, so that an alias such as `LA` for the user isn't
+    // taken for someone else.
+    let allowed: HashSet<String> = full_sids(&trustees).into_iter().collect();
+    let user = full_sids(&[current_user_sid().as_str()])
+        .pop()
+        .expect("the user's SID");
+    assert!(
+        allowed.contains(SYSTEM_SID),
         "SYSTEM must be granted access (SDDL: {sddl})"
     );
     assert!(
-        allowed.contains("IU") || allowed.contains(&user),
+        allowed.contains(INTERACTIVE_SID) || allowed.contains(&user),
         "the interactive user must be granted access (SDDL: {sddl})"
     );
     for trustee in &allowed {
         assert!(
-            trustee == "SY" || trustee == "IU" || *trustee == user,
+            trustee == SYSTEM_SID || trustee == INTERACTIVE_SID || *trustee == user,
             "trustee {trustee} must not be granted access (SDDL: {sddl})"
         );
     }
@@ -1100,7 +1171,7 @@ fn shutdown_closes_connections_and_removes_the_pipe() {
         );
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(&name) {
+            match open_client(&name, CLIENT_ACCESS) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
                 Ok(_) | Err(_) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1119,7 +1190,7 @@ fn dropping_the_server_stops_it() {
     run(async {
         let deadline = Instant::now().checked_add(WAIT).expect("deadline");
         loop {
-            match ClientOptions::new().open(&name) {
+            match open_client(&name, CLIENT_ACCESS) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
                 Ok(_) | Err(_) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(50)).await;

@@ -42,7 +42,7 @@ Every crate but `keitora-sys` has `#![forbid(unsafe_code)]`: a Win32 call that t
 
 ## IPC protocol (`keitora-ipc`)
 
-- **Transport:** named pipe in byte mode, one JSON object per line (frames are lines of text and may be longer than a pipe message, so message mode is not used). The pipe's DACL allows the interactive user and `SYSTEM` only; remote clients are rejected.
+- **Transport:** named pipe in byte mode, one JSON object per line (frames are lines of text and may be longer than a pipe message, so message mode is not used). The pipe's DACL allows `SYSTEM`, the interactive user and the account the service runs as, and no one else. The interactive user gets `0x12019b`: everything a client needs, without `FILE_CREATE_PIPE_INSTANCE`, so no process of that user can serve the pipe's name. An installed service runs as `SYSTEM`, so its DACL grants that right to no user; under `--console` the service's own ACE is the interactive user's, which keeps the exposure in development only ([threat-model.md](threat-model.md)). Clients open their end with that same mask, through `keitora_sys::named_pipe::open_client`. Remote clients are rejected.
 - **Framing:** one frame per line: compact JSON ending in `
 `, at most `MAX_FRAME_LEN` (8 MiB) bytes without it. The length is checked on the raw bytes, before parsing; a longer line is refused and the reader skips the rest of it without storing it ([ADR-0014](adr/0014-ipc-protocol-wire-format.md)).
 - **Envelope:** `{ "v": 1, "id": "<id>", "kind": "request" | "response" | "event", "payload": { "type": "<snake_case name>", … } }`. The id is 1 to 64 bytes of ASCII letters, digits and `-`; a response carries the id of its request. The payload is flat: its fields sit next to `type`.

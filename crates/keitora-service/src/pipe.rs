@@ -5,8 +5,9 @@
 //!
 //! Clients are untrusted ([`docs/threat-model.md`]), so the server:
 //!
-//! - creates the pipe with an explicit DACL, [`PIPE_SDDL`]: `SYSTEM` and the
-//!   interactive user only;
+//! - creates the pipe with an explicit DACL, [`pipe_sddl`]: `SYSTEM`, the
+//!   interactive user with the client's rights only, and the account the
+//!   service itself runs as;
 //! - rejects remote clients (`PIPE_REJECT_REMOTE_CLIENTS`);
 //! - creates the first instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so it
 //!   fails to start if someone else already serves the name;
@@ -44,8 +45,8 @@ use keitora_ipc::{
     Envelope, Event, FrameReader, Message, MessageId, ProtocolError, Request, Response, decode,
     encode,
 };
-use keitora_sys::named_pipe::create_server;
-use keitora_sys::security::SecurityDescriptor;
+use keitora_sys::named_pipe::{CLIENT_ACCESS, create_server};
+use keitora_sys::security::{SecurityDescriptor, current_process_sid};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
 use tokio::runtime::Builder;
@@ -56,27 +57,80 @@ use tokio::time::Instant;
 /// The name of the service's pipe.
 pub const PIPE_NAME: &str = r"\\.\pipe\keitora";
 
-/// The pipe's DACL, in SDDL, protected against inheritance (`P`):
+/// The pipe's DACL in SDDL for a service running as `service_sid`, protected
+/// against inheritance (`P`):
 ///
 /// - `SYSTEM` (`SY`): full access;
-/// - the interactive user (`IU`): `FRFW`, file read and write. Opening a pipe
-///   for reading and writing needs `FILE_APPEND_DATA`, which on a pipe is
-///   `FILE_CREATE_PIPE_INSTANCE`, so this right can't be narrowed; the first
-///   instance's flag is what keeps the name from being taken over.
+/// - the interactive user (`IU`): [`CLIENT_ACCESS`] (`0x12019b`) and nothing
+///   more. That is everything a client needs, without `FILE_APPEND_DATA`,
+///   which on a pipe is `FILE_CREATE_PIPE_INSTANCE`, the right to serve the
+///   pipe's name;
+/// - `service_sid`, when it isn't `SYSTEM`'s: full access, so the service can
+///   create the instances it serves clients on. It is an account of the
+///   developer under `--console`, and a narrower ACE wouldn't protect the
+///   pipe from it: what matters is the right to create instances, which the
+///   service needs, and as the usual owner of the pipe (the default owner of
+///   a non-elevated user's token is the user) it has `READ_CONTROL` and
+///   `WRITE_DAC` whatever the DACL says.
 ///
-/// **Accepted risk (M1):** because of that right, the interactive user can
-/// still create extra instances of the pipe, and so answer clients in the
-/// service's place or use up instances (a cap on instances bounds the latter).
-/// The fix is a narrower DACL (no `FILE_CREATE_PIPE_INSTANCE`) together with a
-/// `keitora-sys` wrapper that opens the pipe with an explicit access mask,
-/// because tokio's client always asks for `GENERIC_WRITE`. It is planned as a
-/// task of its own before the desktop client (T-3.1) and the native messaging
-/// host (T-4.1); see `docs/threat-model.md`.
+/// No one else is granted anything: not Everyone, Authenticated Users, Users,
+/// Anonymous nor Network. Administrators get no ACE of their own; they can
+/// still take ownership, as they can of any object.
 ///
-/// No one else is granted anything: not Everyone, Authenticated Users,
-/// Users, Anonymous nor Network. Administrators get no ACE of their own; they
-/// can still take ownership, as they can of any object.
-pub const PIPE_SDDL: &str = "D:P(A;;FA;;;SY)(A;;FRFW;;;IU)";
+/// Installed, the service runs as `SYSTEM`, so no ACE grants a user the right
+/// to create an instance and no process of the interactive user can serve the
+/// pipe's name or use up its instances (findings M1 and M1b). With
+/// `--console`, the service runs as the interactive user, so that user's own
+/// ACE grants it that right again: the development mode keeps the exposure by
+/// design, since the service can't create its instances otherwise.
+///
+/// Windows checks `FILE_CREATE_PIPE_INSTANCE` in `CreateNamedPipeW` only, not
+/// when a client opens the pipe's other end (measured on Windows 11 26200), so
+/// this DACL is what closes M1 and M1b; clients still ask for no more than
+/// [`CLIENT_ACCESS`] as defense in depth.
+///
+/// `service_sid` is the SID of the service's own token, as
+/// [`keitora_sys::security::current_process_sid`] reports it. A string that
+/// isn't a SID in that text form is left out of the DACL instead of being
+/// pasted into it, which makes the service fail to start rather than widen the
+/// DACL.
+///
+/// The descriptor sets no owner (`O:`), so the pipe's owner is the default
+/// owner of the service's token. Naming one would fail for a process that
+/// may not assign it: an unprivileged process can't make `SYSTEM` the owner
+/// (`ERROR_INVALID_OWNER`).
+#[must_use]
+pub fn pipe_sddl(service_sid: &str) -> String {
+    let mut sddl = format!("D:P(A;;FA;;;SY)(A;;0x{CLIENT_ACCESS:x};;;IU)");
+    if is_sid(service_sid) && service_sid != SYSTEM_SID {
+        sddl.push_str("(A;;FA;;;");
+        sddl.push_str(service_sid);
+        sddl.push(')');
+    }
+    sddl
+}
+
+/// The SID the service runs under once it is installed.
+const SYSTEM_SID: &str = "S-1-5-18";
+
+/// The longest a SID's text can be: `S-1-`, an identifier authority and up to
+/// 15 sub-authorities, each at most 10 digits and a separator.
+const MAX_SID_TEXT: usize = 190;
+
+/// Whether `text` is a SID in the text form Windows writes, such as
+/// `S-1-5-21-1-2-3-1001`: `S-1-` and then decimal numbers separated by `-`.
+/// Only such a string may be put in the DACL, so that nothing else can be
+/// smuggled into it.
+fn is_sid(text: &str) -> bool {
+    let Some(authorities) = text.strip_prefix("S-1-") else {
+        return false;
+    };
+    !authorities.is_empty()
+        && text.len() <= MAX_SID_TEXT
+        && authorities
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+}
 
 /// The most clients served at the same time. A connection beyond this is
 /// closed right away. 64 is twice what the desktop app, the native messaging
@@ -366,7 +420,12 @@ fn run(
         }
     };
     runtime.block_on(async {
-        let security = match SecurityDescriptor::from_sddl(PIPE_SDDL) {
+        // The DACL names the account the service runs as, so that it can
+        // create its instances without granting that right to the interactive
+        // user (see `pipe_sddl`).
+        let security = match current_process_sid()
+            .and_then(|sid| SecurityDescriptor::from_sddl(&pipe_sddl(&sid)))
+        {
             Ok(security) => security,
             Err(error) => {
                 let _ = ready.send(Err(PipeError::Security(error)));
@@ -732,6 +791,48 @@ mod tests {
 
     #[test]
     fn the_security_descriptor_text_is_valid() {
-        SecurityDescriptor::from_sddl(PIPE_SDDL).expect("PIPE_SDDL parses");
+        let sid = current_process_sid().expect("the process has a SID");
+        for service_sid in [SYSTEM_SID, sid.as_str()] {
+            SecurityDescriptor::from_sddl(&pipe_sddl(service_sid)).expect("the pipe's SDDL parses");
+        }
+    }
+
+    #[test]
+    fn the_interactive_user_gets_the_client_mask_only() {
+        let sddl = pipe_sddl(SYSTEM_SID);
+        assert_eq!(sddl, "D:P(A;;FA;;;SY)(A;;0x12019b;;;IU)");
+        // `FILE_APPEND_DATA`, that is `FILE_CREATE_PIPE_INSTANCE`.
+        assert_eq!(CLIENT_ACCESS & 0x0000_0004, 0);
+    }
+
+    #[test]
+    fn a_service_that_is_not_system_gets_an_ace_of_its_own() {
+        let sddl = pipe_sddl("S-1-5-21-1-2-3-1001");
+        assert_eq!(
+            sddl,
+            "D:P(A;;FA;;;SY)(A;;0x12019b;;;IU)(A;;FA;;;S-1-5-21-1-2-3-1001)"
+        );
+    }
+
+    #[test]
+    fn only_a_sid_reaches_the_dacl() {
+        for text in [
+            "",
+            "SY",
+            "IU",
+            "S-1-5-21-1-2-3-1001)(A;;FA;;;WD",
+            "S-1-5-21-1-2-3-1001;;;WD",
+            "s-1-5-18",
+            "S-1-",
+        ] {
+            assert!(!is_sid(text), "{text} must not be taken for a SID");
+            assert_eq!(
+                pipe_sddl(text),
+                "D:P(A;;FA;;;SY)(A;;0x12019b;;;IU)",
+                "{text} must not add an ACE"
+            );
+        }
+        assert!(is_sid("S-1-5-18"));
+        assert!(is_sid("S-1-5-21-1-2-3-1001"));
     }
 }
