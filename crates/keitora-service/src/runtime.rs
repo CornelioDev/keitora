@@ -16,8 +16,8 @@
 //!
 //! If the store can't be opened, or its snapshot can't be read, the service
 //! runs without its engine and without the pipe until it is stopped, and
-//! logs why: it never answers for, or overwrites, a session it couldn't
-//! read (T-2.7 decides how it recovers). The process monitor joins in T-2.6.
+//! logs why. That keeps a stored session from being overwritten, but
+//! enforces nothing: T-2.7 revisits it (ADR-0017). The process monitor joins in T-2.6.
 
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};

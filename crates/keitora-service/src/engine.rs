@@ -3,6 +3,7 @@
 //! The service engine: [`ServiceEngine`] wires `keitora-core`'s pomodoro
 //! engine to the store, applies the requests of clients, publishes events
 //! and saves a snapshot of the engine on every transition.
+//! ADR-0017 records the design, and what T-2.6 must keep off this lock.
 //!
 //! # One engine, one clock, no thread of its own
 //!
