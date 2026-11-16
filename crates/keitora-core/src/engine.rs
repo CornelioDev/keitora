@@ -978,6 +978,15 @@ pub struct EngineState {
     session: Option<SessionState>,
 }
 
+impl EngineState {
+    /// Whether the snapshot has no session: the engine was idle, or its
+    /// session was over, when it was taken.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.session.is_none()
+    }
+}
+
 /// A session in an [`EngineState`]. It is checked only by
 /// [`Engine::restore`], apart from its preset, which is always valid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
