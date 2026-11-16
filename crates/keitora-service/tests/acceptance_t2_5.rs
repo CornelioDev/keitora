@@ -174,10 +174,11 @@
 
 #![cfg(test)]
 
+use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use keitora_core::engine::{LockKind, PomodoroPreset};
@@ -268,6 +269,8 @@ mod fake {
 /// A fresh, empty data folder for one test, named after it, under Cargo's
 /// temporary folder for integration tests.
 fn data_dir(test_name: &str) -> PathBuf {
+    // Before any code under test can log (see `install_log_capture`).
+    install_log_capture();
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("acceptance_t2_5")
         .join(test_name);
@@ -575,16 +578,61 @@ impl io::Write for LogBuffer {
     }
 }
 
+thread_local! {
+    /// The buffer [`capture_logs`] is filling on this thread, if any.
+    static CAPTURE: RefCell<Option<LogBuffer>> = const { RefCell::new(None) };
+}
+
+/// Writes each record to the capture buffer of the thread that logged it,
+/// or nowhere if that thread isn't capturing.
+#[derive(Debug)]
+struct ThisThreadsCapture;
+
+impl io::Write for ThisThreadsCapture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match CAPTURE.with_borrow(Clone::clone) {
+            Some(mut buffer) => io::Write::write(&mut buffer, bytes),
+            None => Ok(bytes.len()),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Installs, once per test binary, one global subscriber that formats every
+/// record, at every level, into [`ThisThreadsCapture`].
+///
+/// `tracing` caches whether each callsite is enabled globally, for every
+/// thread. With a subscriber per test (`with_default`), a callsite first hit
+/// while another test's subscriber was being registered could cache
+/// "disabled", and a later capture would miss its records. With one global
+/// subscriber at `TRACE`, installed before any test runs code that logs,
+/// every callsite is always enabled; which thread's buffer a record goes to
+/// is decided when it is written.
+fn install_log_capture() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(|| ThisThreadsCapture)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("no other global subscriber is set in this test binary");
+    });
+}
+
 /// Runs `action` with every `tracing` event of this thread, at every level,
-/// written to a buffer, and returns its result and the text logged.
+/// written to a buffer, and returns its result and the text logged. Records
+/// from other threads aren't captured.
 fn capture_logs<T>(action: impl FnOnce() -> T) -> (T, String) {
+    install_log_capture();
     let buffer = LogBuffer::default();
-    let writer = buffer.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(move || writer.clone())
-        .finish();
-    let result = tracing::subscriber::with_default(subscriber, action);
+    let previous = CAPTURE.replace(Some(buffer.clone()));
+    let result = action();
+    CAPTURE.set(previous);
     let bytes = buffer
         .0
         .lock()
