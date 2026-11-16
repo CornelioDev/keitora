@@ -1678,6 +1678,7 @@ version = "0.0.0"
 name = "keitora-service"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.4.3",
  "keitora-core",
  "keitora-ipc",
  "keitora-sys",
