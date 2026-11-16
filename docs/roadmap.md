@@ -108,7 +108,7 @@ MVP phases: **F0 → F6**. Later: **F7 → F9**.
   - Also: extend `disallowed-methods` in the root `clippy.toml` and in both `crates/keitora-core/clippy.toml` and `crates/keitora-ipc/clippy.toml` (which replace the root one for those crates; `scripts/clippy-config.spec.mjs` fails if they drift) with the panicking methods the framing code could reach and the current list misses: `Vec::split_off`, `String::split_off`, `core::iter::Sum::sum`, `core::iter::Product::product`, plus those of any buffer crate added here (e.g. `bytes`: `split_to`, `split_off`, `advance`, `get_u32*`).
 - [x] **T-2.4** Named-pipe server `\\.\pipe\keitora` with explicit DACL and `PIPE_REJECT_REMOTE_CLIENTS`; multiple clients; event subscriptions.
   - Depends on: T-2.3
-- [ ] **T-2.5** Service engine: wires `keitora-core`, applies requests, emits events, persists a snapshot on every transition.
+- [~] **T-2.5** Service engine: wires `keitora-core`, applies requests, emits events, persists a snapshot on every transition.
   - Depends on: T-1.7, T-2.2, T-2.4
 - [ ] **T-2.6** Process monitor: detects new processes (500 ms polling with `sysinfo` in the MVP), terminates matches during focus, logs each block.
   - Depends on: T-1.5, T-2.5
