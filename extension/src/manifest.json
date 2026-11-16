@@ -7,5 +7,14 @@
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
-  }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["block-page/index.html"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
 }

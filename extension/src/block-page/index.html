@@ -1,0 +1,69 @@
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Every string, including this title and the document's language, is
+      filled in by block-page.ts from chrome.i18n: the markup ships empty. -->
+    <title></title>
+    <link rel="stylesheet" href="./block-page.css" />
+    <!-- Built by Vite from block-page.ts, as service-worker.js is. -->
+    <script type="module" src="./block-page.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <div class="badge">
+        <svg
+          class="badge-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="M12 3 19 6v6c0 4.5-2.9 7.6-7 9-4.1-1.4-7-4.5-7-9V6l7-3z" />
+        </svg>
+      </div>
+
+      <h1 id="heading"></h1>
+      <p class="explanation" id="explanation" hidden></p>
+
+      <section class="session" id="session" hidden>
+        <p class="clock" id="clock"></p>
+        <p class="session-line">
+          <span id="remaining-label"></span>
+          <span id="phase"></span>
+          <span id="cycle"></span>
+        </p>
+      </section>
+
+      <p class="notice" id="no-data" hidden></p>
+
+      <p class="strict" id="strict-notice" hidden>
+        <svg
+          class="strict-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
+          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+        </svg>
+        <span id="strict-text"></span>
+      </p>
+    </main>
+
+    <footer class="footer">
+      <span id="footer-text"></span>
+    </footer>
+  </body>
+</html>

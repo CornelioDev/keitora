@@ -24,6 +24,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
+  // The extension's pages run in a tab, not in the worker: they are checked
+  // by tsconfig.page.json, against the DOM's types.
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts"]
+  "exclude": ["src/**/*.spec.ts", "src/block-page/**/*.ts"]
 }

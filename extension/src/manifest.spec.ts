@@ -37,12 +37,33 @@ describe("manifest.json", () => {
   it("declares only the skeleton's keys and asks for no capabilities", () => {
     expect(Object.keys(manifest).sort()).toEqual([
       "background",
+      "content_security_policy",
       "default_locale",
       "description",
       "manifest_version",
       "name",
       "version",
+      "web_accessible_resources",
     ]);
+  });
+
+  // T-4.4: the block page is the only resource a blocked site may reach, and
+  // the policy leaves the page no way to run code that is not in the package.
+  it("exposes the block page and nothing else", () => {
+    expect(manifest.web_accessible_resources).toEqual([
+      {
+        resources: ["block-page/index.html"],
+        matches: ["http://*/*", "https://*/*"],
+      },
+    ]);
+  });
+
+  it("allows no inline, remote or generated code on its pages", () => {
+    const policy = manifest.content_security_policy as {
+      extension_pages: string;
+    };
+
+    expect(policy.extension_pages).toBe("script-src 'self'; object-src 'self'");
   });
 
   it("runs its service worker as a module", () => {
