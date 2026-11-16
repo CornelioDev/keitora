@@ -46,6 +46,8 @@ Because the service runs as `SYSTEM` and accepts input from user-level processes
 | Close the UI | Logic lives in the service | F2 |
 | Kill the service | Runs as `SYSTEM`; automatic recovery | F2, F5 |
 | Reboot | Persistent snapshot, restored on start | F2 |
+| Fill the disk so that a strict session can't be saved | A strict session starts only once its first snapshot is on disk; later checkpoints overwrite it in place and need no new space, and a failed one keeps the session in memory and is retried ([ADR-0013](adr/0013-store-snapshot-in-place-and-never-reset.md), [#48](https://github.com/CornelioDev/keitora/issues/48)) | F2 |
+| Edit, delete or add a blocklist during a strict session | The service refuses every blocklist change until the session's timer ends ([#18](https://github.com/CornelioDev/keitora/issues/18)) | F2 |
 | Change the system clock | Remaining time uses a monotonic clock | F5 |
 | Sleep or hibernate until the session is over | Time asleep doesn't count toward a session: the service's clock reads the unbiased interrupt time ([ADR-0010](adr/0010-session-time-as-active-time.md)) | F2 |
 | Disable or remove the extension | `ExtensionInstallForcelist` policy + heartbeat | F4, F5 |

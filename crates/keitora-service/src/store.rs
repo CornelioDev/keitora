@@ -86,7 +86,8 @@ pub const DB_FILE_NAME: &str = "keitora.db";
 /// The longest engine snapshot the store saves or loads, in bytes of its
 /// JSON.
 ///
-/// The longest snapshot the engine writes is about 250 bytes, so this
+/// The longest snapshot the service writes, bound to its blocklist's id
+/// ([`Store::save_bound_snapshot`]), is 286 bytes, so this
 /// leaves room for fields later versions may add (ADR-0011). Every snapshot
 /// is padded with spaces to exactly this length, which keeps each save in
 /// the same place on disk (#48), and fits in one 4 KiB SQLite page, so a
