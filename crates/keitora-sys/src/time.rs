@@ -45,9 +45,11 @@ pub fn unbiased_interrupt_time() -> Option<u64> {
 /// Greenwich), from `GetTimeZoneInformation`, with daylight saving time
 /// applied when it is in effect.
 ///
-/// It is the offset of the system's time zone, which only an administrator
-/// can change, at the instant of the call: near a change to or from daylight
-/// saving time, it may differ from the offset a few hours earlier or later.
+/// It is the offset of the system's time zone at the instant of the call:
+/// near a change to or from daylight saving time, it may differ from the
+/// offset a few hours earlier or later. Standard users hold
+/// `SeTimeZonePrivilege` and can change the time zone, so it must only
+/// decide how times are shown or grouped, never how long a session lasts.
 ///
 /// Returns `None` if Windows reports a failure.
 #[must_use]
