@@ -38,10 +38,11 @@ pub fn run(data_dir: Option<PathBuf>, dll_search_restricted: io::Result<()>) -> 
     }
 
     let data_dir = data_dir.map_or_else(default_data_dir, Ok);
-    match &data_dir {
+    // Held until this function returns, which writes the last records.
+    let _logs = match &data_dir {
         Ok(data_dir) => logging::init(&logs_dir(data_dir)),
         Err(error) => logging::init_without_files(error),
-    }
+    };
     tracing::info!(
         "Keitora service {} starting in console mode",
         env!("CARGO_PKG_VERSION")

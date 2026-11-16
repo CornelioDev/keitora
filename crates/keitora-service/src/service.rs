@@ -76,10 +76,11 @@ fn service_main(_arguments: Vec<OsString>) {
     // The arguments of a start request are ignored: whoever may start the
     // service doesn't get to configure it.
     let data_dir = default_data_dir();
-    match &data_dir {
+    // Held until this function returns, which writes the last records.
+    let _logs = match &data_dir {
         Ok(data_dir) => logging::init(&logs_dir(data_dir)),
         Err(error) => logging::init_without_files(error),
-    }
+    };
     tracing::info!(
         "Keitora service {} starting as a Windows service",
         env!("CARGO_PKG_VERSION")
