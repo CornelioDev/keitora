@@ -91,6 +91,14 @@ pub enum StoreError {
     /// [`Blocklist::validate`]: keitora_core::model::Blocklist::validate
     #[error("invalid blocklist")]
     InvalidBlocklist(#[source] ValidationError),
+    /// [`Store::put_blocklist`](super::Store::put_blocklist) refused a new
+    /// blocklist: [`MAX_BLOCKLISTS`](super::MAX_BLOCKLISTS) are stored
+    /// already. Nothing was stored.
+    #[error("too many blocklists: at most {max} are kept")]
+    TooManyBlocklists {
+        /// The most blocklists the store keeps.
+        max: usize,
+    },
     /// A blocklist read from the file fails [`Blocklist::validate`]: the
     /// file was edited or damaged.
     ///

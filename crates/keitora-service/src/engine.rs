@@ -53,7 +53,7 @@
 //!
 //! The core engine decides what a strict session refuses: stopping,
 //! pausing, skipping, starting over it ([`EngineError::StrictSession`]), and
-//! editing any blocklist ([`Engine::can_edit_blocklist`], #18). Each refusal
+//! editing any blocklist ([`Engine::can_edit_blocklist`], T-1.6). Each refusal
 //! is [`ProtocolError::StrictSessionLocked`]. Settings only hold the preset
 //! of later sessions, so they can be changed during a strict session.
 //!
@@ -81,7 +81,6 @@ use keitora_core::engine::{
     Engine, EngineError, LockKind, LockReason as CoreLockReason, Phase as CorePhase,
     PomodoroPreset, Status,
 };
-use keitora_core::model::Blocklist;
 use keitora_ipc::{
     BlockEvent as IpcBlockEvent, BlocklistSummary, Event, HistoryEntry, HistoryRange, Outcome,
     PageRequest, ProtocolError, Request, Response, SessionState, Settings as IpcSettings,
@@ -90,7 +89,8 @@ use keitora_ipc::{
 
 use crate::pipe::RequestHandler;
 use crate::store::{
-    BlockEvent, SessionOutcome, SessionRecord, Settings, Store, StoreError, TargetKind,
+    BlockEvent, BlocklistSummary as StoredSummary, SessionOutcome, SessionRecord, Settings, Store,
+    StoreError, TargetKind,
 };
 
 mod stop_text;
@@ -234,7 +234,7 @@ struct SaveFailure {
 }
 
 /// The state of the checkpoints.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Checkpoint {
     /// When the last save succeeded, by the monotonic clock.
     saved_at: Option<MonotonicInstant>,
@@ -489,6 +489,7 @@ impl ServiceEngine {
         };
 
         let before = state.engine.clone();
+        let checkpoint_before = state.checkpoint;
         state
             .engine
             .start(preset.clone(), lock, &*self.clock)
@@ -508,6 +509,10 @@ impl ServiceEngine {
                 // back to exactly that.
                 state.engine = before;
                 state.session = None;
+                // Nothing about the earlier state changed, so nothing is
+                // owed for it: a tick must not save the idle engine over a
+                // stored snapshot.
+                state.checkpoint = checkpoint_before;
                 tracing::warn!(
                     error = %describe(&failure.error),
                     "a strict session was refused: its snapshot couldn't be saved"
@@ -602,7 +607,7 @@ impl ServiceEngine {
         state
             .store
             .put_blocklist(&blocklist)
-            .map_err(|error| internal("couldn't store a blocklist", &error))?;
+            .map_err(upsert_error)?;
         self.events
             .publish(Event::BlocklistChanged { id: blocklist.id });
         Ok(Response::Ok)
@@ -708,7 +713,7 @@ impl RequestHandler for ServiceEngine {
                 // The pipe server answers `Subscribe` itself, and a request this
                 // version doesn't know can't be served.
                 _ => {
-                    tracing::debug!("a request the engine doesn't serve reached it");
+                    tracing::warn!("a request the engine doesn't serve reached it");
                     Err(ProtocolError::Internal)
                 }
             };
@@ -722,13 +727,13 @@ impl RequestHandler for ServiceEngine {
 
 /// `ListBlocklists`.
 fn list_blocklists(state: &State, page: PageRequest) -> Result<Response, ProtocolError> {
-    let blocklists = state
+    let found = state
         .store
-        .blocklists()
+        .blocklist_summaries_page(page.offset(), page.limit())
         .map_err(|error| internal("couldn't read the blocklists", &error))?;
-    let (items, next_offset) = page_of(blocklists, page);
+    let next_offset = next_offset(page.offset(), found.items.len(), found.more);
     Ok(Response::Blocklists {
-        items: items.into_iter().map(summary).collect(),
+        items: found.items.into_iter().map(summary).collect(),
         next_offset,
     })
 }
@@ -804,6 +809,19 @@ fn engine_error(error: EngineError) -> ProtocolError {
         // No session, one already running, already paused, not paused, or
         // not a break; and any refusal the core engine adds later.
         _ => ProtocolError::InvalidState,
+    }
+}
+
+/// The protocol's error for a blocklist the store didn't store: a new one
+/// beyond [`MAX_BLOCKLISTS`](crate::store::MAX_BLOCKLISTS) is the client's
+/// to fix; anything else is the service's.
+fn upsert_error(error: StoreError) -> ProtocolError {
+    match error {
+        StoreError::TooManyBlocklists { .. } => ProtocolError::Validation {
+            field: "blocklist".to_owned(),
+            kind: ValidationKind::TooMany,
+        },
+        error => internal("couldn't store a blocklist", &error),
     }
 }
 
@@ -900,18 +918,6 @@ fn start_of_day(now: SystemTime, offset_minutes: i32) -> Option<SystemTime> {
     }
 }
 
-/// The page `page` of `items`, and the offset of the next page if an item
-/// follows it. Any offset works: past the end, the page is empty.
-fn page_of<T>(items: Vec<T>, page: PageRequest) -> (Vec<T>, Option<u32>) {
-    let offset = usize::try_from(page.offset()).unwrap_or(usize::MAX);
-    let limit = usize::try_from(page.limit()).unwrap_or(usize::MAX);
-    let mut rest = items.into_iter().skip(offset);
-    let taken: Vec<T> = rest.by_ref().take(limit).collect();
-    let more = rest.next().is_some();
-    let next = next_offset(page.offset(), taken.len(), more);
-    (taken, next)
-}
-
 /// The offset of the page after one of `count` items at `offset`: `None`
 /// when no item follows it, or when its offset wouldn't fit in a `u32`.
 fn next_offset(offset: u32, count: usize, more: bool) -> Option<u32> {
@@ -923,12 +929,12 @@ fn next_offset(offset: u32, count: usize, more: bool) -> Option<u32> {
         .and_then(|count| offset.checked_add(count))
 }
 
-/// A blocklist as `ListBlocklists` lists it.
-fn summary(blocklist: Blocklist) -> BlocklistSummary {
+/// A stored blocklist's summary as `ListBlocklists` lists it.
+fn summary(stored: StoredSummary) -> BlocklistSummary {
     BlocklistSummary {
-        id: blocklist.id,
-        name: blocklist.name,
-        color: blocklist.color,
+        id: stored.id,
+        name: stored.name,
+        color: stored.color,
     }
 }
 
@@ -994,7 +1000,7 @@ mod tests {
     use std::path::PathBuf;
 
     use keitora_core::engine::LockKind;
-    use keitora_core::model::{SitePattern, Target};
+    use keitora_core::model::{Blocklist, SitePattern, Target};
 
     use super::*;
 
@@ -1227,10 +1233,6 @@ mod tests {
         .expect("a valid wall time")
     }
 
-    fn page(offset: u32, limit: u32) -> PageRequest {
-        PageRequest::new(offset, limit).expect("a valid page")
-    }
-
     #[test]
     fn today_starts_at_local_midnight() {
         // 2027-01-15T08:00:00Z.
@@ -1277,15 +1279,6 @@ mod tests {
             Duration::from_secs(28 * 60)
         );
         assert_eq!(total_focus(&preset), Duration::from_secs(100 * 60));
-    }
-
-    #[test]
-    fn pages_of_a_list_stop_at_its_end_whatever_the_offset() {
-        let items: Vec<u32> = (0..7).collect();
-        assert_eq!(page_of(items.clone(), page(0, 3)), (vec![0, 1, 2], Some(3)));
-        assert_eq!(page_of(items.clone(), page(6, 3)), (vec![6], None));
-        assert_eq!(page_of(items.clone(), page(4, 3)), (vec![4, 5, 6], None));
-        assert_eq!(page_of(items, page(u32::MAX, 100)), (Vec::new(), None));
     }
 
     #[test]
@@ -1358,5 +1351,61 @@ mod tests {
         fn wall(&self) -> SystemTime {
             UNIX_EPOCH
         }
+    }
+
+    #[test]
+    fn a_refused_strict_start_owes_no_save_over_the_stored_snapshot() {
+        let h = harness("refused-strict-start");
+        h.start(PomodoroPreset::default(), LockKind::UntilTimerEnds);
+        let stored = h.stored();
+        assert!(stored.as_ref().is_some_and(|bound| !bound.state.is_idle()));
+
+        // The service starts again; its engine is idle until T-2.7 restores
+        // the stored session.
+        let second = ServiceEngine::new(
+            Store::open(&h.dir).expect("opens"),
+            Arc::new(HandClock::default()),
+            Arc::new(Recorder::default()),
+        )
+        .expect("starts");
+        {
+            // Another connection holds the write lock: the start's save
+            // fails once SQLite's busy timeout runs out.
+            let lock = rusqlite::Connection::open(h.dir.join(crate::store::DB_FILE_NAME))
+                .expect("opens the file directly");
+            lock.execute_batch("BEGIN IMMEDIATE")
+                .expect("takes the lock");
+            assert_eq!(
+                second.handle(Request::StartSession {
+                    blocklist_id: "work".to_owned(),
+                    preset: PomodoroPreset::default(),
+                    lock: LockKind::UntilTimerEnds,
+                }),
+                Response::Error {
+                    error: ProtocolError::Internal
+                }
+            );
+            lock.execute_batch("ROLLBACK").expect("releases the lock");
+        }
+        assert!(!second.lock().checkpoint.owed);
+        second.tick();
+        assert_eq!(h.stored(), stored, "the idle engine saved nothing over it");
+    }
+
+    #[test]
+    fn a_new_blocklist_beyond_the_cap_is_a_validation_error() {
+        assert_eq!(
+            upsert_error(StoreError::TooManyBlocklists {
+                max: crate::store::MAX_BLOCKLISTS,
+            }),
+            ProtocolError::Validation {
+                field: "blocklist".to_owned(),
+                kind: ValidationKind::TooMany,
+            }
+        );
+        assert_eq!(
+            upsert_error(StoreError::WriteNotApplied { what: "blocklist" }),
+            ProtocolError::Internal
+        );
     }
 }

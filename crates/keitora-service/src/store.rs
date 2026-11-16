@@ -95,6 +95,12 @@ pub const DB_FILE_NAME: &str = "keitora.db";
 /// this is refused without being parsed.
 pub const MAX_SNAPSHOT_BYTES: usize = 2048;
 
+/// The most blocklists the store keeps. A new one beyond this is refused
+/// ([`StoreError::TooManyBlocklists`]); replacing a stored one is always
+/// allowed. It bounds what a client can make the service store and list,
+/// far beyond what a person curates by hand.
+pub const MAX_BLOCKLISTS: usize = 1000;
+
 /// What the service remembers between runs, apart from blocklists.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Settings {
@@ -198,6 +204,18 @@ pub struct BoundSnapshot {
     /// The id of the blocklist the session enforces; `None` when the
     /// snapshot has no session, or was saved without an id.
     pub blocklist_id: Option<String>,
+}
+
+/// What `ListBlocklists` shows of a blocklist, read without decoding its
+/// targets ([`Store::blocklist_summaries_page`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlocklistSummary {
+    /// The blocklist's id.
+    pub id: String,
+    /// The name shown to the user.
+    pub name: String,
+    /// The color shown next to the name, `#rrggbb`.
+    pub color: String,
 }
 
 /// One page of a list read from the store.
@@ -307,9 +325,22 @@ impl Store {
     ///
     /// [`StoreError::InvalidBlocklist`] if `blocklist` fails
     /// [`Blocklist::validate`]; nothing is stored, and a blocklist stored
-    /// with that id stays. [`StoreError::Database`] if it can't be written.
+    /// with that id stays. [`StoreError::TooManyBlocklists`] if its id is
+    /// new and [`MAX_BLOCKLISTS`] are stored already. [`StoreError::Database`]
+    /// if it can't be written.
     pub fn put_blocklist(&mut self, blocklist: &Blocklist) -> Result<(), StoreError> {
         blocklist.validate().map_err(StoreError::InvalidBlocklist)?;
+        let (stored, exists): (i64, bool) = self.connection.query_row(
+            "SELECT count(*), coalesce(sum(id = ?1), 0) > 0 FROM blocklist",
+            [&blocklist.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let max = i64::try_from(MAX_BLOCKLISTS).unwrap_or(i64::MAX);
+        if !exists && stored >= max {
+            return Err(StoreError::TooManyBlocklists {
+                max: MAX_BLOCKLISTS,
+            });
+        }
         let json = encode(blocklist, "blocklist")?;
         let changed = self.connection.execute(
             "INSERT INTO blocklist (id, json) VALUES (?1, ?2) \
@@ -337,6 +368,42 @@ impl Store {
             blocklists.push(decode_blocklist(row)?);
         }
         Ok(blocklists)
+    }
+
+    /// A page of the stored blocklists' summaries, in the order they were
+    /// first stored: `limit` of them at most, after skipping `offset`. Any
+    /// `offset` works: past the end, the page is empty.
+    ///
+    /// Only each blocklist's id, name and color are read, by SQLite, so a
+    /// page never decodes targets. They are checked as
+    /// [`Blocklist::validate`] checks them, and the JSON's `id` must be the
+    /// row's.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvalidStoredBlocklist`] or [`StoreError::Corrupt`] if
+    /// a blocklist of the page is invalid or can't be decoded.
+    /// [`StoreError::Database`] if the file can't be read.
+    pub fn blocklist_summaries_page(
+        &self,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Page<BlocklistSummary>, StoreError> {
+        // `json_valid` first, so that a damaged value is `Corrupt` rather
+        // than an SQL error from `json_extract`.
+        let mut query = self.connection.prepare(
+            "SELECT id, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.id') END, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.name') END, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.color') END \
+             FROM blocklist ORDER BY position LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = query.query(params![one_more(limit), offset])?;
+        let mut summaries = Vec::new();
+        while let Some(row) = rows.next()? {
+            summaries.push(decode_summary(row)?);
+        }
+        Ok(page(summaries, limit))
     }
 
     /// The stored blocklist whose id is exactly `id`, if any.
@@ -861,6 +928,45 @@ fn decode_blocklist(row: &Row<'_>) -> Result<Blocklist, StoreError> {
         return Err(StoreError::Corrupt { what: "blocklist" });
     }
     Ok(blocklist)
+}
+
+/// The summary in a row of [`Store::blocklist_summaries_page`]'s query,
+/// checked.
+///
+/// # Errors
+///
+/// [`StoreError::Corrupt`] if a field isn't text or the JSON's id isn't
+/// the row's; [`StoreError::InvalidStoredBlocklist`] if the id, name or
+/// color fails [`Blocklist::validate`].
+fn decode_summary(row: &Row<'_>) -> Result<BlocklistSummary, StoreError> {
+    let corrupt = || StoreError::Corrupt { what: "blocklist" };
+    let text = |index: usize| -> Result<String, StoreError> {
+        match row.get::<_, rusqlite::types::Value>(index)? {
+            rusqlite::types::Value::Text(text) => Ok(text),
+            _ => Err(corrupt()),
+        }
+    };
+    let id = text(0)?;
+    if text(1)? != id {
+        return Err(corrupt());
+    }
+    // The same checks as a whole blocklist's, on the fields shown.
+    let shown = Blocklist {
+        id,
+        name: text(2)?,
+        color: text(3)?,
+        targets: Vec::new(),
+        exceptions: Vec::new(),
+        block_during_breaks: false,
+    };
+    shown
+        .validate()
+        .map_err(|source| StoreError::InvalidStoredBlocklist { source })?;
+    Ok(BlocklistSummary {
+        id: shown.id,
+        name: shown.name,
+        color: shown.color,
+    })
 }
 
 /// The record in a row of `SELECT started_at_ms, blocklist_id, preset,
@@ -1781,5 +1887,106 @@ mod tests {
         assert!(!last.more);
         let past = store.block_events_page(u32::MAX, 100).expect("reads");
         assert_eq!((past.items.len(), past.more), (0, false));
+    }
+
+    #[test]
+    fn blocklist_summaries_page_in_stored_order_without_targets() {
+        let (_sandbox, mut store) = store("summaries");
+        for id in ["c", "a", "b"] {
+            store.put_blocklist(&blocklist(id)).expect("stores");
+        }
+        let ids = |page: &Page<BlocklistSummary>| -> Vec<String> {
+            page.items
+                .iter()
+                .map(|summary| summary.id.clone())
+                .collect()
+        };
+        let first = store.blocklist_summaries_page(0, 2).expect("reads");
+        assert_eq!(
+            (ids(&first), first.more),
+            (vec!["c".to_owned(), "a".to_owned()], true)
+        );
+        assert_eq!(first.items[0].name, "Work");
+        assert_eq!(first.items[0].color, "#112233");
+        let last = store.blocklist_summaries_page(2, 2).expect("reads");
+        assert_eq!((ids(&last), last.more), (vec!["b".to_owned()], false));
+        let past = store
+            .blocklist_summaries_page(u32::MAX, 100)
+            .expect("reads");
+        assert_eq!((past.items.len(), past.more), (0, false));
+    }
+
+    #[test]
+    fn a_tampered_summary_is_an_error_not_listed() {
+        for (test_name, json, corrupt) in [
+            ("summary-not-json", "not json", true),
+            (
+                "summary-other-id",
+                r##"{"id":"x","name":"W","color":"#112233"}"##,
+                true,
+            ),
+            (
+                "summary-name-number",
+                r##"{"id":"a","name":5,"color":"#112233"}"##,
+                true,
+            ),
+            (
+                "summary-bad-color",
+                r##"{"id":"a","name":"W","color":"red"}"##,
+                false,
+            ),
+        ] {
+            let (_sandbox, mut store) = store(test_name);
+            store.put_blocklist(&blocklist("a")).expect("stores");
+            store
+                .connection
+                .execute("UPDATE blocklist SET json = ?1", [json])
+                .expect("tampers");
+            let result = store.blocklist_summaries_page(0, 10);
+            if corrupt {
+                assert!(
+                    matches!(result, Err(StoreError::Corrupt { what: "blocklist" })),
+                    "{test_name}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(StoreError::InvalidStoredBlocklist { .. })),
+                    "{test_name}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_blocklist_beyond_the_cap_is_refused_but_a_stored_one_can_change() {
+        let (_sandbox, mut store) = store("blocklist-cap");
+        store.put_blocklist(&blocklist("b0")).expect("stores");
+        // The rest in one transaction, which is much faster than one each.
+        let transaction = store.connection.transaction().expect("begins");
+        for n in 1..MAX_BLOCKLISTS {
+            let id = format!("b{n}");
+            let json = serde_json::to_string(&blocklist(&id)).expect("encodes");
+            transaction
+                .execute(
+                    "INSERT INTO blocklist (id, json) VALUES (?1, ?2)",
+                    params![id, json],
+                )
+                .expect("inserts");
+        }
+        transaction.commit().expect("commits");
+
+        assert!(matches!(
+            store.put_blocklist(&blocklist("one-too-many")),
+            Err(StoreError::TooManyBlocklists {
+                max: MAX_BLOCKLISTS
+            })
+        ));
+        assert_eq!(store.blocklist("one-too-many").expect("reads"), None);
+        let mut renamed = blocklist("b0");
+        renamed.name = "Renamed".to_owned();
+        store
+            .put_blocklist(&renamed)
+            .expect("replaces a stored one");
+        assert_eq!(store.blocklist("b0").expect("reads"), Some(renamed));
     }
 }
