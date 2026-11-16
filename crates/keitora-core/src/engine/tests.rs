@@ -426,8 +426,10 @@ fn snapshot_of_an_idle_or_ended_engine_has_no_session() {
         EngineState { session: None }
     );
     let engine = running(PomodoroPreset::default(), LockKind::None, &clock);
+    assert!(!engine.snapshot(&clock).is_idle());
     clock.set(mins(3 + 130));
     assert_eq!(engine.snapshot(&clock), EngineState { session: None });
+    assert!(engine.snapshot(&clock).is_idle());
 }
 
 #[test]

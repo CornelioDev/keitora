@@ -80,6 +80,12 @@ rusqlite_migration = "2.7.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
+# The operating system's cryptographically secure random source, for the
+# text a `random_text` session asks the user to type (keitora-service
+# `engine`). On Windows it calls `ProcessPrng` in bcryptprimitives.dll, from
+# System32; it has no default features and none are turned on.
+getrandom = { version = "0.4.3", default-features = false }
+
 # Async I/O for the named-pipe server (keitora-service `pipe`, keitora-sys
 # `named_pipe`). Each crate turns on only the features it uses; the
 # multi-threaded runtime (`rt-multi-thread`) is not needed.

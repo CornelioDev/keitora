@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The Keitora Windows service, the single source of truth for sessions and
-//! blocklists. It will persist state, block applications and serve the
-//! desktop app and the native messaging host over a named pipe
+//! blocklists. It persists state, serves the desktop app and the native
+//! messaging host over a named pipe, and will block applications
 //! (`docs/architecture.md`).
 //!
 //! The `keitora-service` binary is a thin entry point: it parses its command
@@ -13,8 +13,10 @@
 //!
 //! The service keeps its files in a data folder ([`data_dir`]) and logs to
 //! daily files inside it ([`logging`]); its database, `keitora.db`, is
-//! there too ([`store`]). Time comes from [`clock::SystemClock`]. Clients
-//! reach it over the named pipe served by [`pipe`].
+//! there too ([`store`]). Time comes from [`clock::SystemClock`]. The
+//! [`engine`] runs sessions on `keitora-core`'s pomodoro engine and keeps
+//! them in the store, and clients reach it over the named pipe served by
+//! [`pipe`].
 //!
 //! This crate contains no `unsafe` code: Win32 calls go through the safe
 //! wrappers of `keitora-sys` (ADR-0012).
@@ -29,6 +31,7 @@ pub mod cli;
 pub mod clock;
 pub mod console;
 pub mod data_dir;
+pub mod engine;
 pub mod logging;
 pub mod pipe;
 pub mod runtime;

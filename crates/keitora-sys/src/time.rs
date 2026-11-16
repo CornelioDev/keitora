@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Reading Windows' clocks.
+//! Reading Windows' clocks and time zone.
 
+use windows_sys::Win32::System::Time::{
+    GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION,
+};
 use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTime;
+
+/// What `GetTimeZoneInformation` returns while standard time is in effect
+/// (`TIME_ZONE_ID_STANDARD`, defined in a much larger API family).
+const TIME_ZONE_ID_STANDARD: u32 = 1;
+
+/// What `GetTimeZoneInformation` returns while daylight saving time is in
+/// effect (`TIME_ZONE_ID_DAYLIGHT`).
+const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
 
 /// The number of 100-nanosecond units the system has been awake since it
 /// started, from `QueryUnbiasedInterruptTime`.
@@ -30,6 +41,36 @@ pub fn unbiased_interrupt_time() -> Option<u64> {
     (succeeded != 0).then_some(time)
 }
 
+/// How many minutes local time is ahead of UTC right now (negative west of
+/// Greenwich), from `GetTimeZoneInformation`, with daylight saving time
+/// applied when it is in effect.
+///
+/// It is the offset of the system's time zone at the instant of the call:
+/// near a change to or from daylight saving time, it may differ from the
+/// offset a few hours earlier or later. Standard users hold
+/// `SeTimeZonePrivilege` and can change the time zone, so it must only
+/// decide how times are shown or grouped, never how long a session lasts.
+///
+/// Returns `None` if Windows reports a failure.
+#[must_use]
+pub fn local_utc_offset_minutes() -> Option<i32> {
+    let mut zone = TIME_ZONE_INFORMATION::default();
+    // SAFETY: `&raw mut zone` points to a live, aligned
+    // `TIME_ZONE_INFORMATION` owned by this function, which is the structure
+    // the function fills in, and nothing else reads or writes `zone` during
+    // the call.
+    let current = unsafe { GetTimeZoneInformation(&raw mut zone) };
+    // Windows defines UTC = local time + bias, in minutes.
+    let bias = match current {
+        TIME_ZONE_ID_INVALID => return None,
+        TIME_ZONE_ID_STANDARD => zone.Bias.checked_add(zone.StandardBias)?,
+        TIME_ZONE_ID_DAYLIGHT => zone.Bias.checked_add(zone.DaylightBias)?,
+        // `TIME_ZONE_ID_UNKNOWN`: the zone has no daylight saving time.
+        _ => zone.Bias,
+    };
+    bias.checked_neg()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +83,13 @@ mod tests {
             assert!(current >= previous, "{previous} then {current}");
             previous = current;
         }
+    }
+
+    #[test]
+    fn the_local_offset_is_read_and_is_a_real_one() {
+        let offset = local_utc_offset_minutes().expect("the time zone is read");
+        // Real offsets run from UTC-12:00 to UTC+14:00.
+        assert!((-12 * 60..=14 * 60).contains(&offset), "{offset} minutes");
     }
 
     #[test]

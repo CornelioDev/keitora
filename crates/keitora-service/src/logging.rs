@@ -8,8 +8,13 @@
 //!   that day's file, and an earlier day's file is never written to again.
 //! - At most [`MAX_LOG_FILES`] files are kept: when a new one is opened, the
 //!   oldest ones are deleted, so the folder can't grow without limit.
-//! - Records are written as they happen, with no buffer, so nothing is lost
-//!   when the process stops.
+//! - Records are handed to a writer thread of their own
+//!   (`tracing_appender::non_blocking`), so no thread that logs ever waits
+//!   on the disk, stderr or a lock someone holds on a file. If that thread
+//!   falls [`BUFFERED_LINES`] behind, new records are dropped rather than
+//!   waited for. The caller holds the [`LogGuard`] until the process ends;
+//!   dropping it writes what is still buffered, waiting about a second at
+//!   most, so a clean stop loses nothing.
 //! - If the folder can't be created or a file can't be opened, records go to
 //!   stderr instead, and the problem is reported there. The service keeps
 //!   running: refusing to run would let anyone who can break the log folder
@@ -34,8 +39,8 @@ use std::path::Path;
 use std::{fs, io};
 
 use tracing::level_filters::LevelFilter;
+use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{InitError, RollingFileAppender, Rotation};
-use tracing_subscriber::fmt::MakeWriter;
 
 use crate::{error_chain, print_error};
 
@@ -51,22 +56,38 @@ pub const MAX_LOG_FILES: usize = 14;
 /// The most detailed level that is logged.
 const MAX_LEVEL: LevelFilter = LevelFilter::INFO;
 
+/// How many records may wait for the writer thread; beyond that, new ones
+/// are dropped.
+pub const BUFFERED_LINES: usize = 16_384;
+
+/// Keeps the log writer thread running. Hold it until the process ends:
+/// dropping it writes the records still buffered, waiting about a second at
+/// most, and stops the thread, after which nothing more is logged.
+#[must_use = "dropping the guard stops logging"]
+#[derive(Debug)]
+pub struct LogGuard {
+    /// Only held: dropping it is what flushes and stops the writer.
+    _worker: WorkerGuard,
+}
+
 /// Sends this process's `tracing` records to daily files in `logs_dir`,
 /// creating the folder if needed. If that fails, sends them to stderr and
 /// logs why there.
 ///
-/// Call it once, as soon as the process may write to disk; later calls
-/// change nothing and print an error on stderr.
-pub fn init(logs_dir: &Path) {
+/// Call it once, as soon as the process may write to disk, and hold the
+/// guard it returns until the process ends; later calls change nothing and
+/// print an error on stderr.
+pub fn init(logs_dir: &Path) -> LogGuard {
     match daily_files(logs_dir) {
         Ok(files) => install(files),
         Err(error) => {
-            install(io::stderr);
+            let guard = install(io::stderr());
             tracing::error!(
                 "can't write log files to {}, logging to stderr instead: {}",
                 logs_dir.display(),
                 error_chain(&error)
             );
+            guard
         }
     }
 }
@@ -74,13 +95,15 @@ pub fn init(logs_dir: &Path) {
 /// Sends this process's `tracing` records to stderr, when there is no
 /// folder for log files, and logs `reason` there.
 ///
-/// Call it instead of [`init`], once.
-pub fn init_without_files(reason: &dyn std::error::Error) {
-    install(io::stderr);
+/// Call it instead of [`init`], once, and hold the guard it returns until
+/// the process ends.
+pub fn init_without_files(reason: &dyn std::error::Error) -> LogGuard {
+    let guard = install(io::stderr());
     tracing::error!(
         "no folder for log files, logging to stderr instead: {}",
         error_chain(reason)
     );
+    guard
 }
 
 /// Why [`daily_files`] can't write to a log folder.
@@ -119,12 +142,17 @@ pub fn daily_files(logs_dir: &Path) -> Result<RollingFileAppender, LogFilesError
         .map_err(LogFilesError::OpenFile)
 }
 
-/// Makes a subscriber that writes formatted records to `writer` the global
-/// default.
-fn install<W>(writer: W)
+/// Makes a subscriber that hands formatted records to a writer thread,
+/// which writes them to `writer`, the global default.
+fn install<W>(writer: W) -> LogGuard
 where
-    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+    W: io::Write + Send + 'static,
 {
+    let (writer, guard) = NonBlockingBuilder::default()
+        .lossy(true)
+        .buffered_lines_limit(BUFFERED_LINES)
+        .thread_name("keitora-log")
+        .finish(writer);
     let installed = tracing_subscriber::fmt()
         .with_writer(writer)
         .with_max_level(MAX_LEVEL)
@@ -135,6 +163,7 @@ where
             error_chain(error.as_ref())
         ));
     }
+    LogGuard { _worker: guard }
 }
 
 #[cfg(test)]

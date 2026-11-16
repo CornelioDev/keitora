@@ -30,7 +30,7 @@ Because the service runs as `SYSTEM` and accepts input from user-level processes
 - Logs never hold blocklists or other user data. A log folder that can't be used doesn't stop the service: otherwise breaking it would switch off blocking. The service only appends to today's file in `logs` and deletes the oldest files whose names start with `keitora` and end with `log` beyond 14, oldest by creation time.
 - **Open until T-5.3:** `C:\ProgramData` grants `BUILTIN\Users:(CI)(WD,AD,WEA,WA)`, which `Keitora` and `logs` inherit even when `SYSTEM` creates them. So any standard user can, at any time, not only before installation:
   - create files in `logs`, or with Developer Mode symbolic links, such as tomorrow's `keitora.<date>.log`, which the service would then open and append to;
-  - hold an opportunistic lock on a planted file, so that the appender's open or delete hangs while it holds its lock, and with it every thread that logs, since logs are written synchronously;
+  - hold an opportunistic lock on a planted file, so that the appender's open or delete hangs while it holds its lock. Records go through a writer thread of their own, so only that thread hangs: the threads that log go on, and once 16,384 records wait, new ones are dropped, so logging stops until the lock is released;
   - steer which files the retention deletes, through the creation times of planted files;
   - create `%ProgramData%\Keitora` before installation and point it or `logs` elsewhere with a junction;
   - plant `keitora.db`, the store's database, before the service creates it. Once `SYSTEM` has created it, Users can only read it and can't delete it. The store validates what it reads, refuses a schema, root pages or format other than its own, runs no SQL from the file, and refuses to run with an SQLite that has WAL, so a planted `keitora.db-wal` is never read ([ADR-0013](adr/0013-store-snapshot-in-place-and-never-reset.md)). But the data in a planted file, a strict session's snapshot included, is whatever its author chose;
@@ -46,6 +46,9 @@ Because the service runs as `SYSTEM` and accepts input from user-level processes
 | Close the UI | Logic lives in the service | F2 |
 | Kill the service | Runs as `SYSTEM`; automatic recovery | F2, F5 |
 | Reboot | Persistent snapshot, restored on start | F2 |
+| Fill the disk so that a strict session can't be saved | A strict session starts only once its first snapshot is on disk; later checkpoints overwrite it in place and need no new space, and a failed one keeps the session in memory and is retried ([ADR-0013](adr/0013-store-snapshot-in-place-and-never-reset.md), [#48](https://github.com/CornelioDev/keitora/issues/48)) | F2 |
+| Edit, delete or add a blocklist during a strict session | The service refuses every blocklist change until the session's timer ends (`Engine::can_edit_blocklist`, T-1.6) | F2 |
+| Change settings during a strict session | Settings hold only the preset of later sessions; `UpdateSettings` never touches the running session ([#18](https://github.com/CornelioDev/keitora/issues/18)) | F2 |
 | Change the system clock | Remaining time uses a monotonic clock | F5 |
 | Sleep or hibernate until the session is over | Time asleep doesn't count toward a session: the service's clock reads the unbiased interrupt time ([ADR-0010](adr/0010-session-time-as-active-time.md)) | F2 |
 | Disable or remove the extension | `ExtensionInstallForcelist` policy + heartbeat | F4, F5 |

@@ -19,6 +19,7 @@
 
 use std::ffi::OsString;
 use std::io;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
@@ -74,15 +75,17 @@ pub fn run(dll_search_restricted: io::Result<()>) -> windows_service::Result<()>
 fn service_main(_arguments: Vec<OsString>) {
     // The arguments of a start request are ignored: whoever may start the
     // service doesn't get to configure it.
-    match default_data_dir() {
-        Ok(data_dir) => logging::init(&logs_dir(&data_dir)),
-        Err(error) => logging::init_without_files(&error),
-    }
+    let data_dir = default_data_dir();
+    // Held until this function returns, which writes the last records.
+    let _logs = match &data_dir {
+        Ok(data_dir) => logging::init(&logs_dir(data_dir)),
+        Err(error) => logging::init_without_files(error),
+    };
     tracing::info!(
         "Keitora service {} starting as a Windows service",
         env!("CARGO_PKG_VERSION")
     );
-    match run_service() {
+    match run_service(data_dir.ok().as_deref()) {
         Ok(()) => tracing::info!("stopped"),
         Err(error) => tracing::error!(
             "the Service Control Manager rejected a request: {}",
@@ -91,8 +94,9 @@ fn service_main(_arguments: Vec<OsString>) {
     }
 }
 
-/// Registers for the SCM's requests, runs the service and reports its state.
-fn run_service() -> windows_service::Result<()> {
+/// Registers for the SCM's requests, runs the service with its files in
+/// `data_dir`, and reports its state.
+fn run_service(data_dir: Option<&Path>) -> windows_service::Result<()> {
     let (stop, stop_requests) = mpsc::channel();
     let status = service_control_handler::register(SERVICE_NAME, control_handler(stop))?;
 
@@ -114,7 +118,7 @@ fn run_service() -> windows_service::Result<()> {
         ServiceState::Running,
         ServiceExitCode::Win32(0),
     ))?;
-    runtime::run(&stop_requests);
+    runtime::run(&stop_requests, data_dir);
     status.set_service_status(service_status(
         ServiceState::Stopped,
         ServiceExitCode::Win32(0),

@@ -86,13 +86,20 @@ pub const DB_FILE_NAME: &str = "keitora.db";
 /// The longest engine snapshot the store saves or loads, in bytes of its
 /// JSON.
 ///
-/// The longest snapshot the engine writes is about 250 bytes, so this
+/// The longest snapshot the service writes, bound to its blocklist's id
+/// ([`Store::save_bound_snapshot`]), is 286 bytes, so this
 /// leaves room for fields later versions may add (ADR-0011). Every snapshot
 /// is padded with spaces to exactly this length, which keeps each save in
 /// the same place on disk (#48), and fits in one 4 KiB SQLite page, so a
 /// save rewrites a single page of the table. A stored value longer than
 /// this is refused without being parsed.
 pub const MAX_SNAPSHOT_BYTES: usize = 2048;
+
+/// The most blocklists the store keeps. A new one beyond this is refused
+/// ([`StoreError::TooManyBlocklists`]); replacing a stored one is always
+/// allowed. It bounds what a client can make the service store and list,
+/// far beyond what a person curates by hand.
+pub const MAX_BLOCKLISTS: usize = 1000;
 
 /// What the service remembers between runs, apart from blocklists.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -186,6 +193,38 @@ impl TargetKind {
             _ => None,
         }
     }
+}
+
+/// The engine snapshot together with the id of the blocklist its session
+/// enforces, as [`Store::save_bound_snapshot`] writes them (#49).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundSnapshot {
+    /// The engine's snapshot.
+    pub state: EngineState,
+    /// The id of the blocklist the session enforces; `None` when the
+    /// snapshot has no session, or was saved without an id.
+    pub blocklist_id: Option<String>,
+}
+
+/// What `ListBlocklists` shows of a blocklist, read without decoding its
+/// targets ([`Store::blocklist_summaries_page`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlocklistSummary {
+    /// The blocklist's id.
+    pub id: String,
+    /// The name shown to the user.
+    pub name: String,
+    /// The color shown next to the name, `#rrggbb`.
+    pub color: String,
+}
+
+/// One page of a list read from the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page<T> {
+    /// The items of the page, at most as many as asked for.
+    pub items: Vec<T>,
+    /// Whether at least one item follows the page.
+    pub more: bool,
 }
 
 /// The open database. Writing methods take `&mut self` and reading ones
@@ -286,9 +325,22 @@ impl Store {
     ///
     /// [`StoreError::InvalidBlocklist`] if `blocklist` fails
     /// [`Blocklist::validate`]; nothing is stored, and a blocklist stored
-    /// with that id stays. [`StoreError::Database`] if it can't be written.
+    /// with that id stays. [`StoreError::TooManyBlocklists`] if its id is
+    /// new and [`MAX_BLOCKLISTS`] are stored already. [`StoreError::Database`]
+    /// if it can't be written.
     pub fn put_blocklist(&mut self, blocklist: &Blocklist) -> Result<(), StoreError> {
         blocklist.validate().map_err(StoreError::InvalidBlocklist)?;
+        let (stored, exists): (i64, bool) = self.connection.query_row(
+            "SELECT count(*), coalesce(sum(id = ?1), 0) > 0 FROM blocklist",
+            [&blocklist.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let max = i64::try_from(MAX_BLOCKLISTS).unwrap_or(i64::MAX);
+        if !exists && stored >= max {
+            return Err(StoreError::TooManyBlocklists {
+                max: MAX_BLOCKLISTS,
+            });
+        }
         let json = encode(blocklist, "blocklist")?;
         let changed = self.connection.execute(
             "INSERT INTO blocklist (id, json) VALUES (?1, ?2) \
@@ -316,6 +368,42 @@ impl Store {
             blocklists.push(decode_blocklist(row)?);
         }
         Ok(blocklists)
+    }
+
+    /// A page of the stored blocklists' summaries, in the order they were
+    /// first stored: `limit` of them at most, after skipping `offset`. Any
+    /// `offset` works: past the end, the page is empty.
+    ///
+    /// Only each blocklist's id, name and color are read, by SQLite, so a
+    /// page never decodes targets. They are checked as
+    /// [`Blocklist::validate`] checks them, and the JSON's `id` must be the
+    /// row's.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvalidStoredBlocklist`] or [`StoreError::Corrupt`] if
+    /// a blocklist of the page is invalid or can't be decoded.
+    /// [`StoreError::Database`] if the file can't be read.
+    pub fn blocklist_summaries_page(
+        &self,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Page<BlocklistSummary>, StoreError> {
+        // `json_valid` first, so that a damaged value is `Corrupt` rather
+        // than an SQL error from `json_extract`.
+        let mut query = self.connection.prepare(
+            "SELECT id, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.id') END, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.name') END, \
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.color') END \
+             FROM blocklist ORDER BY position LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = query.query(params![one_more(limit), offset])?;
+        let mut summaries = Vec::new();
+        while let Some(row) = rows.next()? {
+            summaries.push(decode_summary(row)?);
+        }
+        Ok(page(summaries, limit))
     }
 
     /// The stored blocklist whose id is exactly `id`, if any.
@@ -459,6 +547,39 @@ impl Store {
         Ok(records)
     }
 
+    /// A page of the sessions that started at `since` or later (all of them
+    /// if `None`), newest first: `limit` of them at most, after skipping
+    /// the `offset` newest. Sessions that started at the same millisecond
+    /// come latest recorded first.
+    ///
+    /// Any `offset` works: past the end, the page is empty.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if a record of the page can't be decoded.
+    /// [`StoreError::Database`] if the file can't be read.
+    pub fn history_page(
+        &self,
+        since: Option<SystemTime>,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Page<SessionRecord>, StoreError> {
+        let since = since.map_or(i64::MIN, wall_time::to_millis_saturating);
+        let mut query = self.connection.prepare(
+            "SELECT started_at_ms, blocklist_id, preset, lock, outcome, focus_ns \
+             FROM session_history \
+             WHERE started_at_ms >= ?1 \
+             ORDER BY started_at_ms DESC, seq DESC \
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let mut rows = query.query(params![since, one_more(limit), offset])?;
+        let mut records = Vec::new();
+        while let Some(row) = rows.next()? {
+            records.push(decode_session(row)?);
+        }
+        Ok(page(records, limit))
+    }
+
     // -----------------------------------------------------------------------
     // Block events
     // -----------------------------------------------------------------------
@@ -506,6 +627,34 @@ impl Store {
         Ok(events)
     }
 
+    /// A page of every block event, newest first: `limit` of them at most,
+    /// after skipping the `offset` newest. Events at the same millisecond
+    /// come latest recorded first.
+    ///
+    /// Any `offset` works: past the end, the page is empty.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if an event of the page can't be decoded.
+    /// [`StoreError::Database`] if the file can't be read.
+    pub fn block_events_page(
+        &self,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Page<BlockEvent>, StoreError> {
+        let mut query = self.connection.prepare(
+            "SELECT at_ms, kind, target FROM block_event \
+             ORDER BY at_ms DESC, seq DESC \
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = query.query(params![one_more(limit), offset])?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next()? {
+            events.push(decode_block_event(row)?);
+        }
+        Ok(page(events, limit))
+    }
+
     // -----------------------------------------------------------------------
     // The engine snapshot
     // -----------------------------------------------------------------------
@@ -524,7 +673,47 @@ impl Store {
     /// its JSON is longer than [`MAX_SNAPSHOT_BYTES`], which no snapshot the
     /// engine writes is.
     pub fn save_snapshot(&mut self, state: &EngineState) -> Result<(), StoreError> {
-        let mut json = encode(state, "engine snapshot")?;
+        self.save_snapshot_json(encode(state, "engine snapshot")?)
+    }
+
+    /// Stores `state` as the engine snapshot, with the id of the blocklist
+    /// its session enforces, replacing the stored one (#49).
+    ///
+    /// The id is written inside the snapshot's own value, as a field
+    /// `blocklist_id` next to `session`, so both are saved by the same
+    /// write and can never disagree; only the id is stored, never the
+    /// blocklist. [`Store::load_snapshot`] still reads the [`EngineState`],
+    /// which skips the field. Otherwise it is [`Store::save_snapshot`]: `Ok`
+    /// means it is on disk, and the write is atomic and needs no new disk
+    /// space once any snapshot was saved.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvalidRecord`] if `blocklist_id` isn't a valid
+    /// blocklist id, or is given for a snapshot with no session; nothing is
+    /// stored. Otherwise those of [`Store::save_snapshot`].
+    pub fn save_bound_snapshot(
+        &mut self,
+        state: &EngineState,
+        blocklist_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        if let Some(id) = blocklist_id
+            && (state.is_idle() || !is_valid_blocklist_id(id))
+        {
+            return Err(StoreError::InvalidRecord {
+                what: "blocklist id",
+            });
+        }
+        let slot = SnapshotSlot {
+            state,
+            blocklist_id,
+        };
+        self.save_snapshot_json(encode(&slot, "engine snapshot")?)
+    }
+
+    /// Pads `json` to [`MAX_SNAPSHOT_BYTES`] and stores it in the
+    /// snapshot's slot.
+    fn save_snapshot_json(&mut self, mut json: String) -> Result<(), StoreError> {
         let padding =
             MAX_SNAPSHOT_BYTES
                 .checked_sub(json.len())
@@ -565,6 +754,46 @@ impl Store {
     /// [`EngineState`] JSON. [`StoreError::Database`] if the file can't be
     /// read.
     pub fn load_snapshot(&self) -> Result<Option<EngineState>, StoreError> {
+        self.load_snapshot_json()?
+            .map(|json| decode(&json, "engine snapshot"))
+            .transpose()
+    }
+
+    /// The stored engine snapshot with the id of the blocklist its session
+    /// enforces, as [`Store::save_bound_snapshot`] wrote them, or `None` if
+    /// no snapshot was ever saved. A snapshot saved by
+    /// [`Store::save_snapshot`] has no id. Restoring and checking the
+    /// engine is `Engine::restore`'s, and deciding what a session without
+    /// an id means is T-2.7's.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Store::load_snapshot`], and [`StoreError::Corrupt`] if the
+    /// id isn't a valid blocklist id or comes with no session.
+    pub fn load_bound_snapshot(&self) -> Result<Option<BoundSnapshot>, StoreError> {
+        let Some(json) = self.load_snapshot_json()? else {
+            return Ok(None);
+        };
+        let state: EngineState = decode(&json, "engine snapshot")?;
+        // Read apart from the state, which skips the field. A plain struct
+        // skips every other field without keeping it.
+        let SlotBinding { blocklist_id } = decode(&json, "engine snapshot")?;
+        if let Some(id) = &blocklist_id
+            && (state.is_idle() || !is_valid_blocklist_id(id))
+        {
+            return Err(StoreError::Corrupt {
+                what: "engine snapshot",
+            });
+        }
+        Ok(Some(BoundSnapshot {
+            state,
+            blocklist_id,
+        }))
+    }
+
+    /// The stored snapshot's JSON, padding included, or `None` if none was
+    /// ever saved. Its length is checked in SQL before it is read.
+    fn load_snapshot_json(&self) -> Result<Option<String>, StoreError> {
         let max = i64::try_from(MAX_SNAPSHOT_BYTES).unwrap_or(i64::MAX);
         // `octet_length` reads the value's length from the record's header,
         // without loading the value; the value itself is only returned
@@ -588,8 +817,45 @@ impl Store {
                 max: MAX_SNAPSHOT_BYTES,
             });
         };
-        decode(&json, "engine snapshot").map(Some)
+        Ok(Some(json))
     }
+}
+
+/// What the snapshot's slot holds when it is bound to a blocklist: the
+/// fields of the [`EngineState`], then `blocklist_id` when there is one.
+/// It is only written; serde buffers nothing to flatten when writing.
+#[derive(Serialize)]
+struct SnapshotSlot<'a> {
+    /// The engine's snapshot, whose fields are written at the top level.
+    #[serde(flatten)]
+    state: &'a EngineState,
+    /// The id of the blocklist the session enforces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocklist_id: Option<&'a str>,
+}
+
+/// The binding read back from the snapshot's slot; every other field is
+/// skipped.
+#[derive(Deserialize)]
+struct SlotBinding {
+    /// The id of the blocklist the session enforces, if one was saved.
+    #[serde(default)]
+    blocklist_id: Option<String>,
+}
+
+/// How many rows to read for a page of `limit` items: one more, to know
+/// whether another follows.
+fn one_more(limit: u32) -> i64 {
+    i64::from(limit).saturating_add(1)
+}
+
+/// The page of at most `limit` items among `items`, which holds one more
+/// when another follows.
+fn page<T>(mut items: Vec<T>, limit: u32) -> Page<T> {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let more = items.len() > limit;
+    items.truncate(limit);
+    Page { items, more }
 }
 
 /// Checks that a write changed exactly one row. With the store's own
@@ -662,6 +928,45 @@ fn decode_blocklist(row: &Row<'_>) -> Result<Blocklist, StoreError> {
         return Err(StoreError::Corrupt { what: "blocklist" });
     }
     Ok(blocklist)
+}
+
+/// The summary in a row of [`Store::blocklist_summaries_page`]'s query,
+/// checked.
+///
+/// # Errors
+///
+/// [`StoreError::Corrupt`] if a field isn't text or the JSON's id isn't
+/// the row's; [`StoreError::InvalidStoredBlocklist`] if the id, name or
+/// color fails [`Blocklist::validate`].
+fn decode_summary(row: &Row<'_>) -> Result<BlocklistSummary, StoreError> {
+    let corrupt = || StoreError::Corrupt { what: "blocklist" };
+    let text = |index: usize| -> Result<String, StoreError> {
+        match row.get::<_, rusqlite::types::Value>(index)? {
+            rusqlite::types::Value::Text(text) => Ok(text),
+            _ => Err(corrupt()),
+        }
+    };
+    let id = text(0)?;
+    if text(1)? != id {
+        return Err(corrupt());
+    }
+    // The same checks as a whole blocklist's, on the fields shown.
+    let shown = Blocklist {
+        id,
+        name: text(2)?,
+        color: text(3)?,
+        targets: Vec::new(),
+        exceptions: Vec::new(),
+        block_during_breaks: false,
+    };
+    shown
+        .validate()
+        .map_err(|source| StoreError::InvalidStoredBlocklist { source })?;
+    Ok(BlocklistSummary {
+        id: shown.id,
+        name: shown.name,
+        color: shown.color,
+    })
 }
 
 /// The record in a row of `SELECT started_at_ms, blocklist_id, preset,
@@ -1427,5 +1732,261 @@ mod tests {
         }
         assert_eq!(SessionOutcome::parse("Completed"), None);
         assert_eq!(TargetKind::parse(""), None);
+    }
+
+    #[test]
+    fn a_bound_snapshot_reads_back_with_its_id_and_as_a_plain_state() {
+        let (_sandbox, mut store) = store("bound-snapshot");
+        let state = strict(600);
+        store
+            .save_bound_snapshot(&state, Some("work"))
+            .expect("saves");
+        assert_eq!(
+            store.load_bound_snapshot().expect("loads"),
+            Some(BoundSnapshot {
+                state: state.clone(),
+                blocklist_id: Some("work".to_owned()),
+            })
+        );
+        assert_eq!(store.load_snapshot().expect("loads"), Some(state.clone()));
+        let json: String = store
+            .connection
+            .query_row("SELECT json FROM engine_snapshot", [], |row| row.get(0))
+            .expect("reads");
+        assert_eq!(json.len(), MAX_SNAPSHOT_BYTES);
+        assert!(
+            json.trim_end().ends_with(r#""blocklist_id":"work"}"#),
+            "{json}"
+        );
+
+        // An idle snapshot has no id, and a plain one reads back without.
+        let idle = Engine::new().snapshot(&SystemClock::new());
+        store.save_bound_snapshot(&idle, None).expect("saves");
+        assert_eq!(
+            store.load_bound_snapshot().expect("loads"),
+            Some(BoundSnapshot {
+                state: idle,
+                blocklist_id: None,
+            })
+        );
+        store.save_snapshot(&state).expect("saves");
+        assert_eq!(
+            store
+                .load_bound_snapshot()
+                .expect("loads")
+                .and_then(|bound| bound.blocklist_id),
+            None
+        );
+    }
+
+    #[test]
+    fn a_bound_snapshot_refuses_a_bad_id_and_keeps_the_stored_one() {
+        let (_sandbox, mut store) = store("bound-snapshot-refused");
+        store
+            .save_bound_snapshot(&strict(1), Some("work"))
+            .expect("saves");
+        let idle = Engine::new().snapshot(&SystemClock::new());
+        for (state, id) in [(&strict(2), "not an id"), (&strict(2), ""), (&idle, "work")] {
+            assert!(matches!(
+                store.save_bound_snapshot(state, Some(id)),
+                Err(StoreError::InvalidRecord {
+                    what: "blocklist id"
+                })
+            ));
+        }
+        assert_eq!(
+            store.load_bound_snapshot().expect("loads"),
+            Some(BoundSnapshot {
+                state: strict(1),
+                blocklist_id: Some("work".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_stored_id_that_is_invalid_or_has_no_session_is_corrupt() {
+        let (_sandbox, mut store) = store("bound-snapshot-corrupt");
+        store
+            .save_bound_snapshot(&strict(1), Some("work"))
+            .expect("saves");
+        for json in [
+            r#"{"session":null,"blocklist_id":"work"}"#,
+            r#"{"session":null,"blocklist_id":"no way"}"#,
+        ] {
+            let padded = format!("{json:<width$}", width = MAX_SNAPSHOT_BYTES);
+            store
+                .connection
+                .execute("UPDATE engine_snapshot SET json = ?1", [&padded])
+                .expect("tampers");
+            assert!(matches!(
+                store.load_bound_snapshot(),
+                Err(StoreError::Corrupt {
+                    what: "engine snapshot"
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn history_pages_come_newest_first_from_the_given_time() {
+        let (_sandbox, mut store) = store("history-pages");
+        let at = |secs: u64| {
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .expect("in range")
+        };
+        for secs in [10, 30, 20, 30] {
+            let mut entry = record(LockKind::None, Duration::from_secs(secs));
+            entry.started_at = at(secs);
+            store.record_session(&entry).expect("records");
+        }
+        let focus = |page: &Page<SessionRecord>| -> Vec<u64> {
+            page.items
+                .iter()
+                .map(|entry| entry.focus.as_secs())
+                .collect()
+        };
+
+        let first = store.history_page(None, 0, 2).expect("reads");
+        assert_eq!((focus(&first), first.more), (vec![30, 30], true));
+        let second = store.history_page(None, 2, 2).expect("reads");
+        assert_eq!((focus(&second), second.more), (vec![20, 10], false));
+        let since = store.history_page(Some(at(20)), 0, 10).expect("reads");
+        assert_eq!((focus(&since), since.more), (vec![30, 30, 20], false));
+        for offset in [4, u32::MAX] {
+            let past = store.history_page(None, offset, 100).expect("reads");
+            assert_eq!((past.items.len(), past.more), (0, false));
+        }
+    }
+
+    #[test]
+    fn block_event_pages_come_newest_first() {
+        let (_sandbox, mut store) = store("block-event-pages");
+        for (secs, target) in [(1, "a.exe"), (3, "c.exe"), (2, "b.exe")] {
+            store
+                .record_block_event(&BlockEvent {
+                    at: SystemTime::UNIX_EPOCH
+                        .checked_add(Duration::from_secs(secs))
+                        .expect("in range"),
+                    kind: TargetKind::App,
+                    target: target.to_owned(),
+                })
+                .expect("records");
+        }
+        let targets = |page: &Page<BlockEvent>| -> Vec<String> {
+            page.items
+                .iter()
+                .map(|event| event.target.clone())
+                .collect()
+        };
+        let first = store.block_events_page(0, 2).expect("reads");
+        assert_eq!(targets(&first), vec!["c.exe", "b.exe"]);
+        assert!(first.more);
+        let last = store.block_events_page(2, 2).expect("reads");
+        assert_eq!(targets(&last), vec!["a.exe"]);
+        assert!(!last.more);
+        let past = store.block_events_page(u32::MAX, 100).expect("reads");
+        assert_eq!((past.items.len(), past.more), (0, false));
+    }
+
+    #[test]
+    fn blocklist_summaries_page_in_stored_order_without_targets() {
+        let (_sandbox, mut store) = store("summaries");
+        for id in ["c", "a", "b"] {
+            store.put_blocklist(&blocklist(id)).expect("stores");
+        }
+        let ids = |page: &Page<BlocklistSummary>| -> Vec<String> {
+            page.items
+                .iter()
+                .map(|summary| summary.id.clone())
+                .collect()
+        };
+        let first = store.blocklist_summaries_page(0, 2).expect("reads");
+        assert_eq!(
+            (ids(&first), first.more),
+            (vec!["c".to_owned(), "a".to_owned()], true)
+        );
+        assert_eq!(first.items[0].name, "Work");
+        assert_eq!(first.items[0].color, "#112233");
+        let last = store.blocklist_summaries_page(2, 2).expect("reads");
+        assert_eq!((ids(&last), last.more), (vec!["b".to_owned()], false));
+        let past = store
+            .blocklist_summaries_page(u32::MAX, 100)
+            .expect("reads");
+        assert_eq!((past.items.len(), past.more), (0, false));
+    }
+
+    #[test]
+    fn a_tampered_summary_is_an_error_not_listed() {
+        for (test_name, json, corrupt) in [
+            ("summary-not-json", "not json", true),
+            (
+                "summary-other-id",
+                r##"{"id":"x","name":"W","color":"#112233"}"##,
+                true,
+            ),
+            (
+                "summary-name-number",
+                r##"{"id":"a","name":5,"color":"#112233"}"##,
+                true,
+            ),
+            (
+                "summary-bad-color",
+                r##"{"id":"a","name":"W","color":"red"}"##,
+                false,
+            ),
+        ] {
+            let (_sandbox, mut store) = store(test_name);
+            store.put_blocklist(&blocklist("a")).expect("stores");
+            store
+                .connection
+                .execute("UPDATE blocklist SET json = ?1", [json])
+                .expect("tampers");
+            let result = store.blocklist_summaries_page(0, 10);
+            if corrupt {
+                assert!(
+                    matches!(result, Err(StoreError::Corrupt { what: "blocklist" })),
+                    "{test_name}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(StoreError::InvalidStoredBlocklist { .. })),
+                    "{test_name}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_blocklist_beyond_the_cap_is_refused_but_a_stored_one_can_change() {
+        let (_sandbox, mut store) = store("blocklist-cap");
+        store.put_blocklist(&blocklist("b0")).expect("stores");
+        // The rest in one transaction, which is much faster than one each.
+        let transaction = store.connection.transaction().expect("begins");
+        for n in 1..MAX_BLOCKLISTS {
+            let id = format!("b{n}");
+            let json = serde_json::to_string(&blocklist(&id)).expect("encodes");
+            transaction
+                .execute(
+                    "INSERT INTO blocklist (id, json) VALUES (?1, ?2)",
+                    params![id, json],
+                )
+                .expect("inserts");
+        }
+        transaction.commit().expect("commits");
+
+        assert!(matches!(
+            store.put_blocklist(&blocklist("one-too-many")),
+            Err(StoreError::TooManyBlocklists {
+                max: MAX_BLOCKLISTS
+            })
+        ));
+        assert_eq!(store.blocklist("one-too-many").expect("reads"), None);
+        let mut renamed = blocklist("b0");
+        renamed.name = "Renamed".to_owned();
+        store
+            .put_blocklist(&renamed)
+            .expect("replaces a stored one");
+        assert_eq!(store.blocklist("b0").expect("reads"), Some(renamed));
     }
 }

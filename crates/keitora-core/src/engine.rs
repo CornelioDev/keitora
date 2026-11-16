@@ -373,19 +373,28 @@ impl LockKind {
     ///
     /// A [`LockError`] for a length out of range; it is never clamped.
     pub fn validate(&self) -> Result<(), LockError> {
+        // Every variant is named, with no `_`, so that a lock added later
+        // must decide here whether it has anything to check.
         match *self {
-            Self::RandomText { len }
-                if !(MIN_RANDOM_TEXT_LEN..=MAX_RANDOM_TEXT_LEN).contains(&len) =>
-            {
-                Err(LockError { len })
+            Self::None | Self::UntilTimerEnds => Ok(()),
+            Self::RandomText { len } => {
+                if (MIN_RANDOM_TEXT_LEN..=MAX_RANDOM_TEXT_LEN).contains(&len) {
+                    Ok(())
+                } else {
+                    Err(LockError { len })
+                }
             }
-            _ => Ok(()),
         }
     }
 
     /// Whether the session is strict: only [`LockKind::UntilTimerEnds`] is.
     fn is_strict(self) -> bool {
-        matches!(self, Self::UntilTimerEnds)
+        // Exhaustive, with no `_` (F1 security review): a lock added later
+        // must be classed as strict or not on purpose, never by default.
+        match self {
+            Self::UntilTimerEnds => true,
+            Self::None | Self::RandomText { .. } => false,
+        }
     }
 }
 
@@ -967,6 +976,15 @@ impl Engine {
 pub struct EngineState {
     /// The session, unless the engine was idle.
     session: Option<SessionState>,
+}
+
+impl EngineState {
+    /// Whether the snapshot has no session: the engine was idle, or its
+    /// session was over, when it was taken.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.session.is_none()
+    }
 }
 
 /// A session in an [`EngineState`]. It is checked only by
