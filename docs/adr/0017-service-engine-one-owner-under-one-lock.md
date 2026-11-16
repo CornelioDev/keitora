@@ -1,6 +1,6 @@
 # 0017 — Run the service engine as one owner under one lock, observed on every call
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-16
 
 ## Context
@@ -18,7 +18,7 @@ T-2.5 wires `keitora-core`'s engine into the service. Several parties touch it: 
 
 ### What the lock still waits on, and what T-2.6 must do
 
-The engine's lock is held during SQLite calls, and a write waits up to SQLite's busy timeout (5 seconds) when another connection holds the database's write lock, which until T-5.3 any user who can open `keitora.db` can take. Requests and ticks wait for that too. Keeping other processes off the file with `PRAGMA locking_mode = EXCLUSIVE` was tried and dropped: the service's own tests, and any tool, read the store through a second connection, which that mode locks out, and ADR-0013 already rejected it for growing the journal.
+The engine's lock is held during SQLite calls, and a write waits up to SQLite's busy timeout (5 seconds) when another connection holds a lock on the database. Any process that can read `keitora.db` can take one, even with a plain read transaction, so this holds for as long as users can read the file, not only until T-5.3. Requests and ticks wait for that too. Keeping other processes off the file with `PRAGMA locking_mode = EXCLUSIVE` was tried and dropped: the service's own tests, and any tool, read the store through a second connection, which that mode locks out, and ADR-0013 already rejected it for growing the journal.
 
 So T-2.6 must keep enforcement off this path: the process monitor never waits on the engine's lock, on SQLite or on logs. It reads what to enforce from a copy the engine publishes (for example the blocklist and phase, swapped atomically on every transition) and records block events without holding up a termination.
 
